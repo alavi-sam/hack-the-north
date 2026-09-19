@@ -1,5 +1,5 @@
 """Untitled Town: world state, agents, economy. The server is the single source of truth."""
-import random, time, json
+import math, random, time, json
 from dataclasses import dataclass, field
 
 import catalog
@@ -14,7 +14,11 @@ PLACES = {
     "farm":   (3, 13, 8, 5, "#4a7c3f"),
     "tavern": (24, 13, 7, 5, "#7a4a6a"),
     "square": (14, 8, 6, 5, "#6b6b52"),
+    "stall_a": (13, 15, 4, 3, "#8a6b3f"),
+    "stall_b": (22, 5, 4, 3, "#8a6b3f"),
 }
+PLOTS = ("stall_a", "stall_b")      # market plots a worker can set up on
+STALL_COST = 55                     # what it takes to open for business
 
 
 def place_center(name):
@@ -57,8 +61,26 @@ class Memory:
     source: str = "self"
 
 
-MAX_CONVO_LINES = 6      # a conversation ends after this many lines
+MAX_CONVO_LINES = 8      # a conversation ends after this many lines
 CONVO_COOLDOWN = 50.0    # seconds before the same pair may start talking again
+
+
+@dataclass
+class Shop:
+    owner: str
+    name: str
+    place: str
+    goods: list = field(default_factory=list)   # each: name, cost, price, base, qty, real_title, url, image
+
+    def good(self, name):
+        name = (name or "").strip().lower()
+        for g in self.goods:
+            if g["name"].lower() == name:
+                return g
+        for g in self.goods:
+            if name and name in g["name"].lower():
+                return g
+        return None
 
 
 @dataclass
@@ -68,6 +90,7 @@ class Conversation:
     b: str
     lines: list = field(default_factory=list)   # {"speaker", "name", "text"}
     started: float = 0.0
+    last_t: float = 0.0
     closed: bool = False
 
     @property
@@ -110,12 +133,14 @@ class Agent:
         if len(self.memories) > 60:
             self.memories = self.memories[-60:]
 
-    def top_memories(self, n=6):
-        """Recent + important. Cheap stand-in for embedding retrieval."""
+    def top_memories(self, n=7):
+        """Important first, recent second. Decay is logarithmic, so something that
+        mattered an hour ago still outranks a trivial thing from a minute ago —
+        a linear decay made agents forget their own deals within minutes."""
         now = time.time()
         scored = sorted(
             self.memories,
-            key=lambda m: m.importance * 2 - (now - m.t) / 60,
+            key=lambda m: m.importance * 5 - math.log1p(max(0, now - m.t) / 60) * 3,
             reverse=True,
         )
         return scored[:n]
@@ -167,12 +192,14 @@ def make_agents():
 
 
 ACTIONS = """move_to(place) | talk_to(agent, intent) | work | rest | gossip(agent, about, claim) |
-buy(item)                      — buy one unit from Mira's shop at the retail price
+buy(item)                      — buy one unit from whichever shop sells it cheapest
 sell_to(agent, item, qty, price)  — sell goods you own (arg = "item, quantity, price EACH")
 buy_from(agent, item, qty, price) — buy goods off another agent (arg = "item, quantity, price EACH")
 pay(agent, amount)             — hand over coin: a bribe, hush money, a gift, a deal you struck
-set_price(item, price)         — shopkeeper only; between cost and 3x cost (arg = "item, price")
-restock(query)                 — Mira only; buy new stock from the outside supplier, costs coin
+set_price(item, price)         — your own shop only; between cost and 3x cost (arg = "item, price")
+restock(query)                 — shop owners; buy new stock from the outside supplier, costs coin
+open_stall(name)               — if you have no shop and 55 coins, take a market plot and trade
+                                 for yourself instead of for wages
 hire(agent, wage)              — offer someone a job you pay for (arg = wage)
 lend(agent, amount)            — front someone money. Bram lends the bank's coin at interest;
                                  anyone else lends their own, and it is owed back to them
@@ -182,17 +209,15 @@ repay(agent, amount)           — pay down what you owe that person"""
 class World:
     def __init__(self):
         self.agents = make_agents()
-        self.stock = catalog.load_stock()
-        # local produce sits in the same shop list, just without a real product link
+        goods = catalog.load_stock()
         for name, price in (("Bread", 4), ("Apples", 3)):
-            self.stock.append({"name": name, "real_title": f"Local {name}",
-                               "price": price, "url": "", "image": ""})
-        # every item now has a cost basis and a finite quantity, so the shop can sell out
-        for it in self.stock:
-            it["cost"] = max(1, round(it["price"] * 0.6))
-            it["qty"] = 6
-        self.prices = {it["name"]: it["price"] for it in self.stock}
-        self.base_prices = dict(self.prices)   # crash/shortage scale off this, never compound
+            goods.append({"name": name, "real_title": f"Local {name}",
+                          "price": price, "url": "", "image": ""})
+        for g in goods:
+            g["cost"] = max(1, round(g["price"] * 0.6))
+            g["base"] = g["price"]
+            g["qty"] = 6
+        self.shops = [Shop("mira", "Mira's Shop", "shop", goods)]
         self.price_mult = 1.0
         self.log = []
         self.conversations = []
@@ -206,6 +231,7 @@ class World:
         self.offers = []              # supplier goods already fetched, ready to buy
         self.proposals = []           # deals put TO the player, awaiting their yes or no
         self.proposal_seq = 0
+        self.last_pitch = {}          # agent id -> when they last pitched the player
         self.wanted = []              # what Mira has asked the supplier for
         self.day = 1
         self.started = time.time()
@@ -235,12 +261,18 @@ class World:
         Nothing leaves your purse without you saying so."""
         for old in self.proposals:
             if old["from"] == ag.id and old["action"] == action and old["arg"] == arg:
-                return f"had already put that to the stranger"
+                return "had already put that to the stranger"
+        # one pitch at a time per person, so the stranger is not buried in cards
+        if any(o["from"] == ag.id for o in self.proposals):
+            return "already has an offer waiting with the stranger"
+        if time.time() - self.last_pitch.get(ag.id, 0) < 25:
+            return "had only just pitched the stranger; gave them room to think"
+        self.last_pitch[ag.id] = time.time()
         self.proposal_seq += 1
         self.proposals.append({"id": self.proposal_seq, "from": ag.id, "name": ag.name,
                                "color": ag.color, "kind": kind, "text": text,
                                "action": action, "arg": arg, "t": time.time()})
-        self.proposals = self.proposals[-6:]
+        self.proposals = self.proposals[-3:]
         self.event(f"{ag.name} put an offer to you: {text}")
         return f"offered the stranger: {text}"
 
@@ -279,11 +311,31 @@ class World:
     def everyone(self):
         return list(self.agents.values()) + [self.you]
 
+    def shop_of(self, owner_id):
+        return next((sh for sh in self.shops if sh.owner == owner_id), None)
+
+    def shop_at(self, place):
+        return next((sh for sh in self.shops if sh.place == place), None)
+
+    def free_plot(self):
+        taken = {sh.place for sh in self.shops}
+        return next((p for p in PLOTS if p not in taken), None)
+
+    def all_goods(self):
+        """Every good on sale anywhere, as (shop, good) pairs."""
+        return [(sh, g) for sh in self.shops for g in sh.goods]
+
+    def cheapest(self, name, in_stock=True):
+        """Where a buyer would actually go for this. Competition lives here."""
+        hits = [(sh, g) for sh, g in self.all_goods()
+                if g["name"].lower() == (name or "").lower() and (g["qty"] > 0 or not in_stock)]
+        if not hits:
+            hits = [(sh, g) for sh, g in self.all_goods()
+                    if name and name.lower() in g["name"].lower() and (g["qty"] > 0 or not in_stock)]
+        return min(hits, key=lambda p: p[1]["price"]) if hits else (None, None)
+
     def stock_of(self, name):
-        for it in self.stock:
-            if it["name"].lower() == (name or "").lower():
-                return it
-        return None
+        return self.cheapest(name, in_stock=False)[1]
 
     def event(self, text):
         self.log.append({"t": time.strftime("%H:%M:%S"), "text": text})
@@ -291,14 +343,7 @@ class World:
             self.log = self.log[-120:]
 
     def shop_item(self, name):
-        name = (name or "").strip().lower()
-        for it in self.stock:
-            if it["name"].lower() == name:
-                return it
-        for it in self.stock:
-            if name and name in it["name"].lower():
-                return it
-        return None
+        return self.cheapest(name, in_stock=False)[1]
 
     def nearby(self, agent, radius=4.0):
         return [o for o in self.everyone()
@@ -313,7 +358,7 @@ class World:
 
     def open_convo(self, a_id, b_id):
         self.convo_seq += 1
-        c = Conversation(self.convo_seq, a_id, b_id, started=time.time())
+        c = Conversation(self.convo_seq, a_id, b_id, started=time.time(), last_t=time.time())
         self.conversations.append(c)
         if len(self.conversations) > 24:
             self.conversations = self.conversations[-24:]
@@ -327,15 +372,22 @@ class World:
         if not (a and b):
             return
         for me, them in ((a, b), (b, a)):
-            said = [l["text"] for l in c.lines if l["speaker"] == them.id]
-            gist = said[-1] if said else "not much"
-            me.remember(f"I spoke with {them.name}. They said: {gist}", 2, source=them.id)
+            theirs = [l["text"] for l in c.lines if l["speaker"] == them.id]
+            mine = [l["text"] for l in c.lines if l["speaker"] == me.id]
+            # keep both closing lines: the terms live there, and one line lost every deal
+            note = f"I talked with {them.name}. They said: {theirs[-1] if theirs else 'little'}"
+            if mine:
+                note += f" I said: {mine[-1]}"
+            me.remember(note + " If we agreed anything, act on it now.", 4, source=them.id)
             self.adjust_trust(me, them.id, 0.04)
+            # act on the agreement while it is still fresh
+            me.next_tick = min(me.next_tick, time.time() + 2.0)
 
-    def convo_transcript(self, ag, limit=6):
+    def convo_transcript(self, ag, limit=8):
         """The open conversation this agent is in, rendered for their prompt."""
-        for c in reversed(self.conversations):
-            if not c.closed and ag.id in c.pair:
+        mine = [c for c in self.conversations if not c.closed and ag.id in c.pair]
+        for c in sorted(mine, key=lambda c: c.last_t, reverse=True):
+            if True:
                 other_id = c.b if c.a == ag.id else c.a
                 other = self.party(other_id)
                 lines = "\n".join(f"{l['name']}: {l['text']}" for l in c.lines[-limit:])
@@ -352,25 +404,31 @@ class World:
         if time.time() < self.townsfolk_next:
             return
         self.townsfolk_next = time.time() + random.uniform(14, 22)
-        mira = self.agents["mira"]
-        in_stock = [it for it in self.stock if it["qty"] > 2]
-        if not in_stock:
-            mira.remember("The shelves are bare and customers left empty-handed.", 4)
+        on_sale = [(sh, g) for sh, g in self.all_goods() if g["qty"] > 2]
+        if not on_sale:
+            for sh in self.shops:
+                owner = self.agents.get(sh.owner)
+                if owner:
+                    owner.remember("The shelves are bare and customers left empty-handed.", 4)
             self.event("Townsfolk found the shelves bare and went away")
             return
-        # cheaper goods sell more often, so Mira's markup is a real trade-off
-        weights = [1.0 / max(1, self.prices.get(it["name"], it["price"])) for it in in_stock]
-        item = random.choices(in_stock, weights=weights)[0]
-        price = self.prices.get(item["name"], item["price"])
-        item["qty"] -= 1
-        mira.cash += price
+        # cheaper wins more custom — this is what makes a price war bite
+        weights = [(1.0 / max(1, g["price"])) ** 1.6 for _, g in on_sale]
+        shop, good = random.choices(on_sale, weights=weights)[0]
+        owner = self.agents.get(shop.owner)
+        price = good["price"]
+        good["qty"] -= 1
+        if owner:
+            owner.cash += price
+            if good["qty"] == 0:
+                owner.remember(f"I have sold out of {good['name']}.", 3)
         self.flows.append({"t": time.strftime("%H:%M:%S"), "from": "Townsfolk",
-                           "to": mira.name, "amount": price, "why": f"bought {item['name']}"})
+                           "to": owner.name if owner else shop.name,
+                           "amount": price, "why": f"bought {good['name']}"})
         if len(self.flows) > 40:
             self.flows = self.flows[-40:]
-        if item["qty"] == 0:
-            mira.remember(f"I have sold out of {item['name']}.", 3)
-        self.event(f"A townsfolk bought {item['name']} for {price} coins, {item['qty']} left")
+        self.event(f"A townsfolk bought {good['name']} at {shop.name} for {price} coins, "
+                   f"{good['qty']} left")
 
     # ---------- fast tick: movement only, never waits on the LLM ----------
     def step(self, dt):
@@ -455,6 +513,7 @@ class World:
                 return f"waited for {other.name} to answer"
 
             convo.lines.append({"speaker": ag.id, "name": ag.name, "text": line})
+            convo.last_t = time.time()
             ag.tx, ag.ty = other.x + 1, other.y
             other.remember(f"{ag.name} said: {line}", 2, source=ag.id)
             self.adjust_trust(other, ag.id, 0.05)
@@ -486,22 +545,23 @@ class World:
             return f"spread a rumour to {other.name}"
 
         if action == "buy":
-            item = self.shop_item(target) or self.shop_item(arg)
-            if not item:
-                return f"could not find '{target}' in the shop"
-            mira = self.agents["mira"]
-            if ag.id == mira.id:
-                return "already owns the shop's stock"
-            price = self.prices.get(item["name"], item["price"])
-            if item["qty"] <= 0:
-                mira.remember(f"I sold out of {item['name']}. I need to restock.", 3)
-                return f"found {item['name']} sold out"
-            if not self.pay(ag, mira, price, f"bought {item['name']}"):
-                return f"could not afford {item['name']} ({price} coins)"
-            item["qty"] -= 1
-            ag.inventory[item["name"]] = ag.inventory.get(item["name"], 0) + 1
-            self.event(f"{ag.name} bought {item['name']} for {price} coins, {item['qty']} left")
-            return f"bought {item['name']} for {price} coins"
+            shop, good = self.cheapest(target or arg)
+            if good is None:
+                shop2, sold_out = self.cheapest(target or arg, in_stock=False)
+                if sold_out is not None:
+                    return f"found {sold_out['name']} sold out everywhere"
+                return f"could not find '{target or arg}' for sale anywhere"
+            owner = self.agents.get(shop.owner)
+            if owner is None or owner.id == ag.id:
+                return "already owns that stock"
+            price = good["price"]
+            if not self.pay(ag, owner, price, f"bought {good['name']}"):
+                return f"could not afford {good['name']} ({price} coins)"
+            good["qty"] -= 1
+            ag.inventory[good["name"]] = ag.inventory.get(good["name"], 0) + 1
+            self.event(f"{ag.name} bought {good['name']} from {shop.name} for {price} coins, "
+                       f"{good['qty']} left")
+            return f"bought {good['name']} from {shop.name} for {price} coins"
 
         if action in ("pay", "give", "bribe"):
             # raw coin, no goods: bribes, hush money, gifts, settling a handshake deal
@@ -535,9 +595,8 @@ class World:
             seller, buyer = (other, ag) if action == "buy_from" else (ag, other)
 
             # the shopkeeper sells off the shelves, not out of her pockets
-            shelf = self.stock_of(name) if seller.id == "mira" else None
-            if shelf is None and seller.id == "mira":
-                shelf = self.shop_item(name)
+            sellers_shop = self.shop_of(seller.id)
+            shelf = sellers_shop.good(name) if sellers_shop else None
             if shelf is not None:
                 have, stockpile = shelf["name"], shelf["qty"]
                 if stockpile <= 0:
@@ -551,7 +610,9 @@ class World:
                     return f"{who} {name or 'goods'} to sell"
 
             if unit is None:
-                unit = self.prices.get(have, 5) if shelf is not None else round(self.prices.get(have, 5) * 0.6)
+                ref = self.stock_of(have)
+                base_price = ref["price"] if ref else 5
+                unit = base_price if shelf is not None else round(base_price * 0.6)
             unit = max(1, int(unit))
             # she will haggle, but never below cost and never above 3x it —
             # the same ceiling set_price obeys, so a greedy mood cannot become a fleecing
@@ -589,18 +650,18 @@ class World:
                 seller.remember(f"I could only fill {qty} of {buyer.name}'s order for {wanted} {have}.", 2)
 
             # selling to the shopkeeper puts the goods on the shelves at that wholesale cost
-            if buyer.id == "mira":
-                item = self.stock_of(have)
+            buyers_shop = self.shop_of(buyer.id)
+            if buyers_shop is not None:
+                item = buyers_shop.good(have)
                 if item:
                     item["qty"] += qty
                     item["cost"] = unit
                 else:
                     retail = max(unit + 1, round(unit * 1.5))
-                    self.stock.append({"name": have, "real_title": f"Local {have}", "url": "",
-                                       "image": "", "price": retail, "cost": unit, "qty": qty})
-                    self.prices[have] = retail
-                    self.base_prices[have] = retail
-                self.event(f"{seller.name} supplied the shop with {qty} {have} "
+                    buyers_shop.goods.append({"name": have, "real_title": f"Local {have}", "url": "",
+                                              "image": "", "price": retail, "base": retail,
+                                              "cost": unit, "qty": qty})
+                self.event(f"{seller.name} supplied {buyers_shop.name} with {qty} {have} "
                            f"at {unit} coins each, {total} in all{shortfall}")
             else:
                 buyer.inventory[have] = buyer.inventory.get(have, 0) + qty
@@ -614,28 +675,41 @@ class World:
                     f"at {unit} coins each, {total} coins in total{shortfall}")
 
         if action == "set_price":
-            if ag.id != "mira":
-                return "does not set the shop's prices"
+            shop = self.shop_of(ag.id)
+            if shop is None:
+                return "keeps no shop, so sets no prices"
             parts = [x.strip() for x in (arg or "").split(",")]
             name = parts[0] if parts and parts[0] else target
-            item = self.shop_item(name)
+            item = shop.good(name)
             if not item:
-                return f"could not find '{name}' on the shelves"
+                return f"has no '{name}' on the shelves"
             try:
                 want = int(float(parts[1]))
             except (IndexError, ValueError):
                 return "did not name a price"
             cost = item["cost"]
-            # the rule from the plan: never below cost, never above 3x cost
-            price = max(cost, min(cost * 3, want))
-            old_price = self.prices.get(item["name"], item["price"])
-            self.prices[item["name"]] = price
-            self.base_prices[item["name"]] = price
+            price = max(cost, min(cost * 3, want))          # never under cost, never over 3x
+            old_price = item["price"]
+            if price == old_price:
+                return f"left {item['name']} at {price} coins"
+            item["price"] = price
+            item["base"] = price
             verb = "marked up" if price > old_price else "cut"
-            self.event(f"Mira {verb} {item['name']} from {old_price} to {price} coins, having paid {cost}")
-            if want != price:
-                return f"{verb} {item['name']} to {price} coins — {want} was outside the allowed range"
-            return f"{verb} {item['name']} from {old_price} to {price} coins"
+            # the rival is the best price among OTHER shops, not counting your own
+            others = [(sh, g) for sh, g in self.all_goods()
+                      if sh.owner != ag.id and g["name"].lower() == item["name"].lower()]
+            rival, rg = min(others, key=lambda pr: pr[1]["price"]) if others else (None, None)
+            under = ""
+            if rival and rg["price"] > price:
+                under = f", undercutting {rival.name}"
+                rival_owner = self.agents.get(rival.owner)
+                if rival_owner:
+                    rival_owner.remember(f"{ag.name} is selling {item['name']} at {price}, "
+                                         f"under my {rg['price']}.", 4, source=ag.id)
+                    self.adjust_trust(rival_owner, ag.id, -0.15)
+            self.event(f"{ag.name} {verb} {item['name']} from {old_price} to {price} coins, "
+                       f"having paid {cost}{under}")
+            return f"{verb} {item['name']} from {old_price} to {price} coins{under}"
 
         if action == "hire":
             if not other:
@@ -742,19 +816,18 @@ class World:
             return f"repaid {creditor.name} {pay} coins, {left} still owing"
 
         if action == "restock":
-            if ag.id != "mira":
-                return "does not run the shop"
+            shop = self.shop_of(ag.id)
+            if shop is None:
+                return "keeps no shop to restock"
             if time.time() - ag.last_restock < 35:
                 return "had already restocked recently"
-            if len(self.stock) >= 14 and not self.stock_of((arg or target or "").strip()):
-                return "had no shelf space for anything new"
             query = (arg or target or "wool scarf").strip()
             if len(query) < 3:
                 return "could not think what to restock"
+            if len(shop.goods) >= 14 and not shop.good(query):
+                return "had no shelf space for anything new"
             ag.last_restock = time.time()
 
-            # The catalogue is fetched off the event loop and kept in a pool, so a slow
-            # supplier can never stall the town mid-tick.
             match = None
             for o in self.offers:
                 if query.lower() in o["name"].lower() or o["name"].lower() in query.lower():
@@ -765,10 +838,9 @@ class World:
                 if query not in self.wanted:
                     self.wanted.append(query)
                 return f"sent word to the supplier about '{query}' and is waiting on a price"
-
             self.offers.remove(match)
             if query not in self.wanted:
-                self.wanted.append(query)          # keep the pool stocked with what she asks for
+                self.wanted.append(query)
 
             unit_cost = max(1, round(match["price"] * 0.6))
             units = 6
@@ -779,20 +851,53 @@ class World:
             ag.cash -= bill
             self.flows.append({"t": time.strftime("%H:%M:%S"), "from": ag.name,
                                "to": "Supplier", "amount": bill, "why": f"wholesale {match['name']}"})
-            existing = self.stock_of(match["name"])
+            existing = shop.good(match["name"])
             if existing:
                 existing["qty"] += units
                 existing["cost"] = unit_cost
+                shelf_price = existing["price"]
             else:
                 match["cost"] = unit_cost
                 match["qty"] = units
-                self.stock.append(match)
-                self.prices[match["name"]] = match["price"]
-                self.base_prices[match["name"]] = match["price"]
-            self.event(f"Mira took delivery of {units} {match['name']} at {unit_cost} coins "
+                match["base"] = match["price"]
+                shop.goods.append(match)
+                shelf_price = match["price"]
+            self.event(f"{ag.name} took delivery of {units} {match['name']} at {unit_cost} coins "
                        f"each, {bill} in all: {match['real_title'][:34]}")
             return (f"bought {units} {match['name']} from the supplier at {unit_cost} coins each "
-                    f"({bill} in all), shelved at {self.prices[match['name']]}")
+                    f"({bill} in all), shelved at {shelf_price}")
+
+        if action in ("open_stall", "open_shop", "found_business"):
+            if self.shop_of(ag.id):
+                return "already keeps a shop"
+            plot = self.free_plot()
+            if plot is None:
+                return "found no free plot in the market — every pitch is taken"
+            if ag.cash < STALL_COST:
+                return (f"needs {STALL_COST} coins to take a market plot and has only {ag.cash}. "
+                        f"Keep working, or ask Bram for the capital.")
+            ag.cash -= STALL_COST
+            name = (arg or target or f"{ag.name}'s Stall").strip()[:28] or f"{ag.name}'s Stall"
+            if ag.name.lower() not in name.lower():
+                name = f"{ag.name}'s {name}"
+            shop = Shop(ag.id, name, plot, [])
+            self.shops.append(shop)
+            # they work for themselves now
+            old_boss = self.party(ag.employer) if ag.employer else None
+            ag.employer, ag.wage = "", 0
+            ag.role = "Shopkeeper"
+            ag.goal = f"Make {name} pay: stock it, price it, and take custom off the competition."
+            ag.tx, ag.ty = place_center(plot)
+            ag.remember(f"I opened {name} on the market plot. I work for myself now.", 5)
+            if old_boss:
+                old_boss.remember(f"{ag.name} left my employ to open {name}.", 4, source=ag.id)
+                self.adjust_trust(old_boss, ag.id, -0.2)
+            for other in self.agents.values():
+                if other.id != ag.id:
+                    other.remember(f"{ag.name} has opened {name} in the market.", 3, source=ag.id)
+            self.event(f"{ag.name} OPENED {name} — {STALL_COST} coins down, working for themselves")
+            return (f"opened {name} for {STALL_COST} coins. The shelves are empty — "
+                    f"restock, or buy stock off Fig, then set prices")
 
         # anything the model invented that the world does not implement
         ag.energy = min(100, ag.energy + 5)
@@ -828,7 +933,12 @@ class World:
             "player": {"x": round(self.you.x, 2), "y": round(self.you.y, 2),
                        "cash": self.you.cash, "inventory": self.you.inventory,
                        "name": self.you.name},
-            "shop": [{**it, "price": self.prices.get(it["name"], it["price"])} for it in self.stock],
+            "shops": [{"owner": sh.owner, "name": sh.name, "place": sh.place,
+                       "owner_name": self.agents[sh.owner].name if sh.owner in self.agents else sh.name,
+                       "color": self.agents[sh.owner].color if sh.owner in self.agents else "#ab977c",
+                       "goods": sh.goods} for sh in self.shops],
+            "shop": [{**g, "shop": sh.name, "owner": sh.owner} for sh in self.shops for g in sh.goods],
+            "plots": list(PLOTS),
             "bank_reserves": self.bank_reserves,
             "interest_rate": self.interest_rate,
             "flows": self.flows[-14:],

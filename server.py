@@ -32,9 +32,13 @@ def build_prompt(ag):
     near = world.nearby(ag)
     mems = "\n".join(f"- {m.text}" for m in ag.top_memories(6)) or "- (nothing yet)"
     trust = ", ".join(f"{world.agents[k].name}:{v:+.2f}" for k, v in ag.trust.items() if k in world.agents)
-    stock = ", ".join(
-        f"{i['name']} {world.prices.get(i['name'], i['price'])}c"
-        f"(cost {i['cost']}c, {i['qty']} left)" for i in world.stock[:8])
+    mine = world.shop_of(ag.id)
+    if mine:
+        stock = ", ".join(f"{g['name']} at {g['price']} (cost {g['cost']}, {g['qty']} left)"
+                          for g in mine.goods[:8]) or "nothing at all — the shelves are empty"
+    else:
+        stock = ", ".join(f"{g['name']} {g['price']}c at {sh.name}"
+                          for sh, g in world.all_goods()[:10])
     inv = ", ".join(f"{k} x{v}" for k, v in ag.inventory.items() if v) or "nothing"
     debt = ", ".join(f"{k} {v}c" for k, v in ag.debts.items() if v) or "none"
     # where this agent sits in the town's supply chain
@@ -42,22 +46,32 @@ def build_prompt(ag):
         economy = (f"You PRODUCE {ag.produces}: `work` grows more, and you earn only by "
                    f'`sell_to` with arg "{ag.produces}, <quantity>, <price each>" at wholesale — '
                    f"or direct to others to undercut her.")
-    elif ag.id == "mira":
-        economy = ("You RUN THE SHOP. You buy stock wholesale (from Fig, or `restock` from the outside "
-                   "supplier) and resell at the price you `set_price`. Wages you owe come out of your own "
-                   "purse. Stock runs out — if the shelves empty you earn nothing, so `restock` early.\n"
-                   "Anyone standing near you is a customer: if they ask to buy something, serve them with "
-                   '`sell_to` and arg "<item>, <quantity>, <price each>". The stranger counts.')
+    elif world.shop_of(ag.id):
+        shop = world.shop_of(ag.id)
+        rivals = [s.name for s in world.shops if s.owner != ag.id]
+        economy = (f"You OWN {shop.name}. You buy stock wholesale (from Fig, or `restock` from the outside "
+                   f" You buy stock wholesale (from Fig, or `restock` from the outside supplier) "
+                   f"and resell at the price you `set_price`. Wages you owe come out of your own purse. "
+                   f"If the shelves empty you earn nothing, so `restock` early.\n"
+                   f"Townsfolk buy from whoever is CHEAPEST, and you compete with: "
+                   f"{', '.join(rivals) if rivals else 'nobody yet'}.\n"
+                   'Anyone standing near you is a customer: serve them with `sell_to` and arg '
+                   '"<item>, <quantity>, <price each>". The stranger counts.')
     elif ag.id == "bram":
         economy = (f"You RUN THE BANK. Reserves: {world.bank_reserves}c. You `lend` at "
                    f"{int(world.interest_rate*100)}% interest and profit only when debts are repaid.")
     elif ag.employer:
         boss = world.party(ag.employer)
+        plot = world.free_plot()
         economy = (f"You WORK FOR {boss.name if boss else ag.employer} at {ag.wage} coins a shift. "
-                   f"`work` pays only if they can actually afford it. Spend your wages at the shop.")
+                   f"`work` pays only if they can actually afford it.\n"
+                   f"You do not have to stay a wage worker: with 55 coins you can `open_stall` "
+                   f"and trade for yourself. You have {ag.cash}. "
+                   + (f"A market plot is still free." if plot else "Every plot is taken for now."))
     else:
-        economy = ("You have NO JOB and no goods — odd jobs pay 2 coins. Get hired, borrow, or talk "
-                   "someone out of their coin.")
+        economy = (f"You have NO JOB and no goods — odd jobs pay 2 coins. Get hired, borrow, or talk "
+                   f"someone out of their coin. With 55 you could `open_stall` and be your own "
+                   f"master; you have {ag.cash}.")
 
     partner, transcript, turns = world.convo_transcript(ag)
     convo_block = ""
@@ -160,7 +174,7 @@ async def supplier_loop():
             idea += 1
             try:
                 found = await asyncio.to_thread(catalog.search, query, 15000, 2)
-                have = {o["name"] for o in world.offers} | {s["name"] for s in world.stock}
+                have = {o["name"] for o in world.offers} | {g["name"] for _, g in world.all_goods()}
                 world.offers.extend(o for o in found if o["name"] not in have)
             except Exception as e:
                 print(f"[supplier] '{query}' unavailable: {e}")
@@ -212,7 +226,7 @@ async def handle(msg):
     elif kind == "buy":
         item = world.shop_item(msg.get("item", ""))
         if item:
-            price = world.prices.get(item["name"], item["price"])
+            price = item["price"]
             if item["qty"] <= 0:
                 world.event(f"{item['name']} is sold out — Mira needs to restock.")
             elif world.you.cash < price:
@@ -220,10 +234,13 @@ async def handle(msg):
             else:
                 world.you.cash -= price
                 world.you.inventory[item["name"]] = world.you.inventory.get(item["name"], 0) + 1
-                world.agents["mira"].cash += price
+                shop, _ = world.cheapest(item["name"], in_stock=False)
+                owner = world.agents.get(shop.owner) if shop else None
+                if owner:
+                    owner.cash += price
+                    owner.remember(f"The stranger bought {item['name']} for {price} coins.",
+                                   2, source="player")
                 item["qty"] -= 1
-                world.agents["mira"].remember(
-                    f"The stranger bought {item['name']} for {price}c.", 2, source="player")
                 world.event(f"You bought {item['name']} for {price} coins, {item['qty']} left")
                 await broadcast({"type": "open_url", "url": item.get("url", ""), "name": item["name"]})
 
@@ -258,8 +275,8 @@ def god_event(name):
     def reprice(mult):
         """Prices always derive from base × a clamped multiplier — never a one-way ratchet."""
         world.price_mult = max(0.35, min(2.5, mult))
-        for k, base in world.base_prices.items():
-            world.prices[k] = max(1, round(base * world.price_mult))
+        for _, g in world.all_goods():
+            g["price"] = max(1, round(g["base"] * world.price_mult))
 
     if name == "crash":
         reprice(world.price_mult * 0.6)

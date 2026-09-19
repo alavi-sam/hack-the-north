@@ -324,8 +324,12 @@ document.getElementById('shop').addEventListener('click', e => {
 });
 
 /* ---------- the town ---------- */
-const ROOF = { shop: '#8c4b32', bank: '#54617e', farm: '#6b7a43', tavern: '#7a4a5e', square: '#7d7455' };
-const SIGN = { shop: 'The Shop', bank: 'The Bank', farm: 'The Farm', tavern: 'The Tavern', square: 'The Square' };
+const ROOF = { shop: '#8c4b32', bank: '#54617e', farm: '#6b7a43', tavern: '#7a4a5e',
+               square: '#7d7455', stall_a: '#9a6f3c', stall_b: '#9a6f3c' };
+const SIGN = { shop: 'The Shop', bank: 'The Bank', farm: 'The Farm', tavern: 'The Tavern',
+               square: 'The Square', stall_a: 'Market plot', stall_b: 'Market plot' };
+/* A plot with an owner gets their shop's name on the sign. */
+const shopAt = place => (S.shops || []).find(sh => sh.place === place);
 
 function render() {
   const T = Math.min(cv.clientWidth / S.map.w, cv.clientHeight / S.map.h);
@@ -409,26 +413,44 @@ function scenery(T) {
 
 function building(name, [x, y, w, h], T) {
   const px = x * T, py = y * T, pw = w * T, ph = h * T, eaves = ph * .34;
-  if (name === 'square') {                       // open ground, not a building
+  const mine = shopAt(name), plot = (S.plots || []).includes(name);
+
+  if (name === 'square') {
     ctx.fillStyle = '#a08f68'; ctx.fillRect(px, py, pw, ph);
     ctx.fillStyle = '#9a8a64';
     for (let i = 0; i < w; i++) for (let j = 0; j < h; j++)
       if ((i * 5 + j * 3) % 4 === 0) ctx.fillRect((x + i) * T, (y + j) * T, T, T);
+  } else if (plot && !mine) {                       // an empty pitch, waiting for someone
+    ctx.strokeStyle = '#8e7c55'; ctx.lineWidth = 2; ctx.setLineDash([6, 5]);
+    ctx.strokeRect(px, py, pw, ph); ctx.setLineDash([]);
+  } else if (plot) {                                // a market stall: awning on posts
+    ctx.fillStyle = '#6b5433';
+    ctx.fillRect(px + T * .1, py + eaves, T * .2, ph - eaves);
+    ctx.fillRect(px + pw - T * .3, py + eaves, T * .2, ph - eaves);
+    ctx.fillStyle = '#c9ae7c';
+    ctx.fillRect(px + T * .1, py + ph - T * .5, pw - T * .2, T * .5);   // counter
+    const stripes = 6, sw = pw / stripes;
+    for (let i = 0; i < stripes; i++) {
+      ctx.fillStyle = i % 2 ? '#c4553f' : '#efe3cb';
+      ctx.fillRect(px + i * sw, py, sw, eaves);
+    }
   } else {
-    ctx.fillStyle = '#d8c7a6'; ctx.fillRect(px, py + eaves, pw, ph - eaves);        // walls
-    ctx.fillStyle = ROOF[name];                                                     // roof
+    ctx.fillStyle = '#d8c7a6'; ctx.fillRect(px, py + eaves, pw, ph - eaves);
+    ctx.fillStyle = ROOF[name] || '#7d6a4e';
     ctx.beginPath(); ctx.moveTo(px - T * .2, py + eaves);
     ctx.lineTo(px + pw / 2, py); ctx.lineTo(px + pw + T * .2, py + eaves); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = '#7a5c3a';                                                      // door
+    ctx.fillStyle = '#7a5c3a';
     ctx.fillRect(px + pw / 2 - T * .32, py + ph - T * .95, T * .64, T * .95);
-    ctx.fillStyle = '#8fb4c4';                                                      // windows
+    ctx.fillStyle = '#8fb4c4';
     ctx.fillRect(px + T * .45, py + eaves + T * .35, T * .55, T * .55);
     ctx.fillRect(px + pw - T * 1, py + eaves + T * .35, T * .55, T * .55);
   }
-  ctx.fillStyle = '#2a211a';
-  ctx.font = `${Math.max(10, T * .46)}px "Iowan Old Style", Palatino, Georgia, serif`;
+
+  const label = mine ? mine.name : (SIGN[name] || name);
+  ctx.fillStyle = mine ? '#1e1710' : (plot ? '#5f5238' : '#2a211a');
+  ctx.font = `${Math.max(10, T * .44)}px "Iowan Old Style", Palatino, Georgia, serif`;
   ctx.textAlign = 'center';
-  ctx.fillText(SIGN[name], px + pw / 2, py + ph + T * .62);
+  ctx.fillText(label, px + pw / 2, py + ph + T * .62);
 }
 
 function sprite({ x, y, color, id, you }, T) {
@@ -581,7 +603,7 @@ function drawShop() {
       ${i.image ? `<img src="${esc(i.image)}" alt="">` : '<div class="noimg"></div>'}
       <div>
         <h4>${esc(i.name)}</h4>
-        <span class="real">${esc(i.real_title || '')}</span>
+        <span class="real">${esc(i.shop || '')} — ${esc(i.real_title || '')}</span>
         <span class="tag"><b>${i.price}</b> coins
           ${i.qty ? `· ${i.qty} on the shelf` : '<span class="out">· none left</span>'}</span>
       </div>
@@ -614,12 +636,19 @@ function drawLedger() {
       `<div class="line"><span>${nm(a.id)} works for ${nm(a.employer)}</span>
        <span class="amt">${a.wage} a shift</span></div>`))}
 
-    <div class="heading">On the shelves, and what she makes on them</div>
-    ${S.shop.map(i => `<div class="line">
-       <span>${esc(i.name)} <span class="note">${i.qty ? i.qty + ' left' : 'sold out'}</span></span>
-       <span class="amt">${i.cost} → ${i.price}
-         <span class="${i.price - i.cost >= 0 ? '' : 'out'}">(${i.price - i.cost >= 0 ? '+' : ''}${i.price - i.cost})</span>
-       </span></div>`).join('')}
+    <div class="heading">Shops in town</div>
+    ${(S.shops || []).map(sh => `<div class="line">
+       <span><b style="color:${sh.color}">${esc(sh.name)}</b>
+         <span class="note">kept by ${esc(sh.owner_name)}</span></span>
+       <span class="amt">${sh.goods.reduce((n, g) => n + g.qty, 0)} on the shelves</span></div>`).join('')}
+
+    ${(S.shops || []).map(sh => `
+      <div class="heading">${esc(sh.name)} — cost → price</div>
+      ${sh.goods.length ? sh.goods.map(g => `<div class="line">
+         <span>${esc(g.name)} <span class="note">${g.qty ? g.qty + ' left' : 'sold out'}</span></span>
+         <span class="amt">${g.cost} → ${g.price}
+           <span class="${g.price - g.cost >= 0 ? '' : 'out'}">(${g.price - g.cost >= 0 ? '+' : ''}${g.price - g.cost})</span>
+         </span></div>`).join('') : '<p class="quiet">Nothing on the shelves yet.</p>'}`).join('')}
 
     <div class="heading">Where the coin went</div>
     ${rows((S.flows || []).slice().reverse().map(f =>
