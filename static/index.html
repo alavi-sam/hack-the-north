@@ -71,6 +71,12 @@
            font-size: 12px; color: var(--paper-dim); backdrop-filter: blur(3px); }
   #purse #when { color: var(--paper); }
   #purse #gov { margin-top: 3px; color: var(--brass); font-size: 11.5px; }
+  #purse #job { margin-top: 5px; font-size: 11.5px; }
+  #purse #bag { margin-top: 5px; display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+  #purse #bag button { background: none; border: 1px solid var(--wood-line); color: var(--paper);
+                       border-radius: 3px; padding: 2px 7px; font-size: 11px; cursor: pointer; }
+  #purse #bag button:hover { border-color: var(--brass); color: var(--brass); }
+  #purse #bag .none { color: var(--paper-dim); font-size: 11px; }
   #purse b { font-family: var(--coin); font-size: 15px; color: var(--brass); font-variant-numeric: tabular-nums; }
   #purse kbd { font: inherit; font-family: var(--coin); color: var(--paper);
                border: 1px solid var(--wood-line); border-radius: 3px; padding: 0 4px; }
@@ -170,6 +176,8 @@
     <div id="civic"></div>
     <div id="purse"><span id="when">Day 1</span> &nbsp;·&nbsp; You carry <b id="coins">100</b> coins
       <div id="gov"></div>
+      <div id="job"></div>
+      <div id="bag"></div>
       &nbsp;<kbd>W A S D</kbd> walk &nbsp;<kbd>E</kbd> turn to someone</div>
     <canvas id="game"></canvas>
     <div id="bottom">
@@ -178,6 +186,7 @@
         <input id="line" type="text" placeholder="Say something…">
         <button class="btn primary" id="say">Say it</button>
         <button class="btn" id="whisper">Whisper a rumour</button>
+        <button class="btn" id="work">Work a shift</button>
       </div>
       <div class="stir">
         <span>Stir things up</span>
@@ -330,6 +339,11 @@ document.getElementById('whisper').onclick = () => {
   if (!t) { line.placeholder = 'Type the rumour first, then whisper it.'; line.focus(); return; }
   send({ type: 'whisper', agent: who.value, text: t }); line.value = '';
 };
+document.getElementById('work').onclick = () => send({ type: 'work' });
+document.getElementById('bag').addEventListener('click', e => {
+  const b = e.target.closest('[data-sell]');
+  if (b) send({ type: 'sell', item: b.dataset.sell });
+});
 document.querySelectorAll('[data-ev]').forEach(b =>
   b.onclick = () => send({ type: 'event', name: b.dataset.ev }));
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
@@ -409,6 +423,16 @@ function render() {
              : c < .85 ? 'Evening' : 'Night';
   document.getElementById('when').textContent = `Day ${S.day} · ${part}`;
   const gov = document.getElementById('gov');
+  const P = S.player;
+  document.getElementById('job').innerHTML = P.employer_name
+    ? `Hired by <b style="color:var(--paper)">${esc(P.employer_name)}</b> at ${P.wage} a shift`
+      + ` &nbsp;·&nbsp; vigour ${P.energy}`
+    : `No work yet — odd jobs pay 3 &nbsp;·&nbsp; vigour ${P.energy}`;
+  const bag = Object.entries(P.inventory || {}).filter(([, n]) => n > 0);
+  document.getElementById('bag').innerHTML = bag.length
+    ? 'Bag: ' + bag.map(([k, n]) =>
+        `<button data-sell="${esc(k)}">${esc(k)} ×${n} — sell</button>`).join('')
+    : '<span class="none">Your bag is empty</span>';
   gov.innerHTML = S.mayor_name
     ? `${esc(S.mayor_name)} governs — ${esc(S.policy)}`
     : `No mayor yet — the town votes in ${S.election_in} day${S.election_in === 1 ? '' : 's'}`;

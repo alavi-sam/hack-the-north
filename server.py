@@ -41,6 +41,19 @@ def build_prompt(ag):
                           for sh, g in world.all_goods()[:10])
     inv = ", ".join(f"{k} x{v}" for k, v in ag.inventory.items() if v) or "nothing"
     debt = ", ".join(f"{k} {v}c" for k, v in ag.debts.items() if v) or "none"
+    # Whoever has the coin and no shop should be looking at the empty pitches.
+    ladder = ""
+    if not world.shop_of(ag.id):
+        cost, plot = world.stall_cost(), world.free_plot()
+        if not plot:
+            ladder = " Every market pitch is taken."
+        elif ag.cash >= cost:
+            ladder = (f" You have {ag.cash} coins and a market pitch stands empty at {cost}. "
+                      f"You could `open_stall` TODAY and work for yourself instead of for others.")
+        else:
+            ladder = (f" A market pitch costs {cost} and you have {ag.cash}. "
+                      f"Save it, or borrow it, and `open_stall`.")
+
     # where this agent sits in the town's supply chain
     if ag.produces:
         economy = (f"You PRODUCE {ag.produces}: `work` grows more, and you earn only by "
@@ -108,6 +121,8 @@ Move it forward: agree, refuse, or make a concrete offer.
 IMPORTANT: if you have already agreed a price, stop talking and DO the deal now —
 use sell_to, buy, lend, repay or hire. Talk alone moves no coins.
 """
+
+    economy += ladder
 
     return f"""You are {ag.name}, the {ag.role}.
 Persona: {ag.persona}
@@ -282,6 +297,12 @@ async def handle(msg):
         except (TypeError, ValueError):
             return
         world.resolve_proposal(pid, bool(msg.get("accept")))
+
+    elif kind == "work":
+        world.event_result = world.player_work()
+
+    elif kind == "sell":
+        world.event_result = world.player_sell(str(msg.get("item", "")))
 
     elif kind == "vote":
         cid = str(msg.get("agent", ""))

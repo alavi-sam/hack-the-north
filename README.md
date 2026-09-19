@@ -157,6 +157,11 @@ sleeps — sleeping costs no tokens, which also keeps the nights cheap. Kit the 
 exception: he keeps his own hours and works the dark alone. Standing next to a sleeper wakes
 them. The map takes a night wash and lamps come on in the windows.
 
+**Earning as the player.** *Work a shift* pays 3 coins for odd jobs, or your wage if someone
+has hired you — agents can offer you a job, which arrives as an offer you accept. Anything in
+your bag can be sold to the nearest shopkeeper at wholesale. Vigour limits how hard you can
+work and comes back on its own.
+
 **Social mobility.** Two market pitches sit empty on the map marked "to let". Any agent with
 `STALL_COST` coins can `open_stall`: they leave their employer, become a shopkeeper with
 their own goods, costs and prices, and their goal is rewritten. Buyers — agents, townsfolk

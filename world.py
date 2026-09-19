@@ -357,6 +357,58 @@ class World:
             if now - p["t"] > 40:
                 self.proposals.remove(p)
 
+    def player_work(self):
+        you = self.you
+        if self.phase == "night":
+            return "The town is asleep. There is no work to be had until morning."
+        if you.energy < 15:
+            return "You are too worn out to work. Rest a while."
+        you.energy -= 15
+        boss = self.party(you.employer) if you.employer else None
+        if boss:
+            paid = self.pay(boss, you, you.wage, "wages")
+            if paid:
+                boss.remember(f"The stranger worked a shift for me; I paid {paid}.", 2,
+                              source="stranger")
+                self.event(f"You worked a shift; {boss.name} paid you {paid} coins")
+                return f"{boss.name} paid you {paid} coins for the shift."
+            self.adjust_trust(you, boss.id, -0.15)
+            self.event(f"{boss.name} could not pay your wages")
+            return f"{boss.name} could not pay you."
+        you.cash += 3
+        self.event("You did odd jobs around the square for 3 coins")
+        return "You hauled and swept around the square. 3 coins."
+
+    def player_sell(self, name):
+        """Sell something out of your bag to whichever shopkeeper is nearest."""
+        you = self.you
+        have = next((k for k in you.inventory if k.lower() == (name or "").lower()
+                     and you.inventory[k] > 0), None)
+        if not have:
+            return f"You have no {name} to sell."
+        keepers = [(self.agents[sh.owner], sh) for sh in self.shops if sh.owner in self.agents]
+        if not keepers:
+            return "There is nobody keeping a shop to sell to."
+        keeper, shop = min(keepers, key=lambda ks:
+                           (ks[0].x - you.x) ** 2 + (ks[0].y - you.y) ** 2)
+        existing = shop.good(have)
+        retail = existing["price"] if existing else max(2, round(self.stock_of(have)["price"]
+                                                                if self.stock_of(have) else 4))
+        price = max(1, round(retail * 0.6))
+        if not self.pay(keeper, you, price, f"bought {have} from the stranger"):
+            return f"{keeper.name} cannot afford {price} coins for your {have}."
+        you.inventory[have] -= 1
+        if existing:
+            existing["qty"] += 1
+            existing["cost"] = price
+        else:
+            shop.goods.append({"name": have, "real_title": f"Local {have}", "url": "", "image": "",
+                               "price": max(price + 1, round(price * 1.5)),
+                               "base": max(price + 1, round(price * 1.5)), "cost": price, "qty": 1})
+        keeper.remember(f"I bought a {have} off the stranger for {price}.", 2, source="stranger")
+        self.event(f"You sold {keeper.name} 1 {have} for {price} coins")
+        return f"{keeper.name} paid you {price} coins for the {have}."
+
     def party(self, ident):
         """Resolve an action's target to a person — an agent, or the player."""
         ident = (ident or "").strip().lower()
@@ -685,6 +737,7 @@ class World:
 
     # ---------- fast tick: movement only, never waits on the LLM ----------
     def step(self, dt):
+        self.you.energy = min(100, self.you.energy + dt * 1.6)
         self.time_tick()
         self.townsfolk_tick()
         self.expire_proposals()
@@ -976,8 +1029,8 @@ class World:
                 wage = 6
             if ag.cash < wage:
                 return f"could not afford to take {other.name} on"
-            if other is self.you:
-                return "the stranger works for nobody"
+            if other is self.you and not consented:
+                return self.propose(ag, "job", f"work at {wage} coins a shift", "hire", str(wage))
             if other.employer == ag.id and other.wage == wage:
                 return f"already employs {other.name} at {wage} coins a shift"
             if other.id == ag.id:
@@ -1208,7 +1261,10 @@ class World:
             } for a in self.agents.values()],
             "player": {"x": round(self.you.x, 2), "y": round(self.you.y, 2),
                        "cash": self.you.cash, "inventory": self.you.inventory,
-                       "name": self.you.name},
+                       "name": self.you.name, "energy": round(self.you.energy),
+                       "employer": self.you.employer, "wage": self.you.wage,
+                       "employer_name": (self.party(self.you.employer).name
+                                         if self.party(self.you.employer) else "")},
             "shops": [{"owner": sh.owner, "name": sh.name, "place": sh.place,
                        "owner_name": self.agents[sh.owner].name if sh.owner in self.agents else sh.name,
                        "color": self.agents[sh.owner].color if sh.owner in self.agents else "#ab977c",
