@@ -5,6 +5,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+import catalog
 import llm
 from world import World, ACTIONS, PLACES, nearest_place
 
@@ -44,12 +45,14 @@ def build_prompt(ag):
     elif ag.id == "mira":
         economy = ("You RUN THE SHOP. You buy stock wholesale (from Fig, or `restock` from the outside "
                    "supplier) and resell at the price you `set_price`. Wages you owe come out of your own "
-                   "purse. Stock runs out — if the shelves empty you earn nothing.")
+                   "purse. Stock runs out — if the shelves empty you earn nothing, so `restock` early.\n"
+                   "Anyone standing near you is a customer: if they ask to buy something, serve them with "
+                   '`sell_to` and arg "<item>, <quantity>, <price each>". The stranger counts.')
     elif ag.id == "bram":
         economy = (f"You RUN THE BANK. Reserves: {world.bank_reserves}c. You `lend` at "
                    f"{int(world.interest_rate*100)}% interest and profit only when debts are repaid.")
     elif ag.employer:
-        boss = world.agents.get(ag.employer)
+        boss = world.party(ag.employer)
         economy = (f"You WORK FOR {boss.name if boss else ag.employer} at {ag.wage} coins a shift. "
                    f"`work` pays only if they can actually afford it. Spend your wages at the shop.")
     else:
@@ -88,6 +91,14 @@ Decide your next single action."""
 
 
 async def agent_tick(ag):
+    try:
+        await _agent_tick(ag)
+    except Exception as e:
+        print(f"[sim] {ag.name}'s turn failed: {type(e).__name__}: {e}")
+        ag.last_action = "stood there, confused"
+
+
+async def _agent_tick(ag):
     text = await llm.chat(SYSTEM, build_prompt(ag), max_tokens=300)
     data = llm.extract_json(text) or world.fallback_decision(ag)
 
@@ -117,7 +128,10 @@ async def sim_loop():
             if now >= ag.next_tick:
                 ag.next_tick = now + SLOW_SECONDS + random.uniform(-1.5, 1.5)
                 asyncio.create_task(agent_tick(ag))
-        await broadcast(world.snapshot())
+        try:
+            await broadcast(world.snapshot())
+        except Exception as e:
+            print(f"[sim] snapshot failed: {type(e).__name__}: {e}")
         await asyncio.sleep(1 / FAST_HZ)
 
 
@@ -132,9 +146,31 @@ async def broadcast(msg):
         clients.discard(ws)
 
 
+RESTOCK_IDEAS = ["wool scarf", "iron kettle", "leather satchel", "beeswax candles",
+                 "clay mug", "linen shirt", "garden spade", "herbal soap"]
+
+
+async def supplier_loop():
+    """Keep a pool of real catalogue goods ready, fetched in a worker thread so the
+    Shopify call never blocks the simulation."""
+    idea = 0
+    while True:
+        if len(world.offers) < 4:
+            query = world.wanted.pop(0) if world.wanted else RESTOCK_IDEAS[idea % len(RESTOCK_IDEAS)]
+            idea += 1
+            try:
+                found = await asyncio.to_thread(catalog.search, query, 15000, 2)
+                have = {o["name"] for o in world.offers} | {s["name"] for s in world.stock}
+                world.offers.extend(o for o in found if o["name"] not in have)
+            except Exception as e:
+                print(f"[supplier] '{query}' unavailable: {e}")
+        await asyncio.sleep(12)
+
+
 @app.on_event("startup")
 async def start():
     asyncio.create_task(sim_loop())
+    asyncio.create_task(supplier_loop())
 
 
 @app.websocket("/ws")
@@ -156,8 +192,8 @@ async def handle(msg):
     kind = msg.get("type")
 
     if kind == "move":
-        world.player["x"] = max(0.5, min(33.5, float(msg.get("x", 17))))
-        world.player["y"] = max(0.5, min(19.5, float(msg.get("y", 11))))
+        world.you.x = world.you.tx = max(0.5, min(33.5, float(msg.get("x", 17))))
+        world.you.y = world.you.ty = max(0.5, min(19.5, float(msg.get("y", 11))))
 
     elif kind == "chat":
         ag = world.agents.get(msg.get("agent", ""))
@@ -179,11 +215,11 @@ async def handle(msg):
             price = world.prices.get(item["name"], item["price"])
             if item["qty"] <= 0:
                 world.event(f"{item['name']} is sold out — Mira needs to restock.")
-            elif world.player["cash"] < price:
+            elif world.you.cash < price:
                 world.event("You cannot afford that.")
             else:
-                world.player["cash"] -= price
-                world.player["inventory"][item["name"]] = world.player["inventory"].get(item["name"], 0) + 1
+                world.you.cash -= price
+                world.you.inventory[item["name"]] = world.you.inventory.get(item["name"], 0) + 1
                 world.agents["mira"].cash += price
                 item["qty"] -= 1
                 world.agents["mira"].remember(
@@ -205,7 +241,9 @@ You have {ag.cash} coins. Stay fully in character. Reply with ONE or TWO short s
     reply = (reply or "...").strip().strip('"')[:200]
     ag.speak(reply, 9)
     ag.remember(f"I told the stranger: {reply}", 1)
-    world.event(f"{ag.name} → You: {reply}")
+    # so that "I'll take the boots" can actually become a sale
+    ag.next_tick = min(ag.next_tick, time.time() + 1.5)
+    world.event(f"{ag.name} said to you: {reply}")
     await broadcast({"type": "reply", "agent": ag.id, "name": ag.name, "text": reply})
 
 

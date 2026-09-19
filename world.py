@@ -174,8 +174,9 @@ pay(agent, amount)             — hand over coin: a bribe, hush money, a gift, 
 set_price(item, price)         — shopkeeper only; between cost and 3x cost (arg = "item, price")
 restock(query)                 — Mira only; buy new stock from the outside supplier, costs coin
 hire(agent, wage)              — offer someone a job you pay for (arg = wage)
-lend(agent, amount)            — bank only; charges interest
-repay(agent)                   — pay down what you owe, interest included"""
+lend(agent, amount)            — front someone money. Bram lends the bank's coin at interest;
+                                 anyone else lends their own, and it is owed back to them
+repay(agent, amount)           — pay down what you owe that person"""
 
 
 class World:
@@ -199,12 +200,18 @@ class World:
         self.convo_cooldown = {}               # frozenset(pair) -> time it may restart
         self.bank_reserves = 300
         self.interest_rate = 0.2      # what Bram charges on a loan
-        self.townsfolk_next = time.time() + 6
+        self.townsfolk_next = time.time() + 10
         self.flows = []               # recent coin movements, for the Economy panel
         self.last_paid = {}           # (payer, payee) -> time, so handouts cannot loop
+        self.offers = []              # supplier goods already fetched, ready to buy
+        self.wanted = []              # what Mira has asked the supplier for
         self.day = 1
         self.started = time.time()
-        self.player = {"x": 17.0, "y": 11.0, "cash": 100, "inventory": {}, "name": "Stranger"}
+        # The player is an Agent like anyone else — just one the model never drives.
+        # Without this, agents had no one to sell to when you asked them to.
+        self.you = Agent("stranger", "Stranger", "Newcomer",
+                         "A newcomer to town.", "See what this town is made of.", "",
+                         "#efe7d6", "square", cash=100, x=17.0, y=11.0, tx=17.0, ty=11.0)
         self.event("The town wakes up.")
 
     # ---------- helpers ----------
@@ -220,6 +227,16 @@ class World:
         if len(self.flows) > 40:
             self.flows = self.flows[-40:]
         return amount
+
+    def party(self, ident):
+        """Resolve an action's target to a person — an agent, or the player."""
+        ident = (ident or "").strip().lower()
+        if ident in ("stranger", "player", "you", "the stranger", "newcomer"):
+            return self.you
+        return self.agents.get(ident)
+
+    def everyone(self):
+        return list(self.agents.values()) + [self.you]
 
     def stock_of(self, name):
         for it in self.stock:
@@ -243,7 +260,7 @@ class World:
         return None
 
     def nearby(self, agent, radius=4.0):
-        return [o for o in self.agents.values()
+        return [o for o in self.everyone()
                 if o.id != agent.id and (o.x - agent.x) ** 2 + (o.y - agent.y) ** 2 < radius ** 2]
 
     def active_convo(self, a_id, b_id):
@@ -265,7 +282,7 @@ class World:
         """End a thread: each side keeps one summarising memory and nudges trust."""
         c.closed = True
         self.convo_cooldown[c.pair] = time.time() + CONVO_COOLDOWN
-        a, b = self.agents.get(c.a), self.agents.get(c.b)
+        a, b = self.party(c.a), self.party(c.b)
         if not (a and b):
             return
         for me, them in ((a, b), (b, a)):
@@ -279,7 +296,7 @@ class World:
         for c in reversed(self.conversations):
             if not c.closed and ag.id in c.pair:
                 other_id = c.b if c.a == ag.id else c.a
-                other = self.agents.get(other_id)
+                other = self.party(other_id)
                 lines = "\n".join(f"{l['name']}: {l['text']}" for l in c.lines[-limit:])
                 return other, lines, len(c.lines)
         return None, "", 0
@@ -293,9 +310,9 @@ class World:
         which is the only coin entering the economy — everything else is a transfer."""
         if time.time() < self.townsfolk_next:
             return
-        self.townsfolk_next = time.time() + random.uniform(7, 13)
+        self.townsfolk_next = time.time() + random.uniform(14, 22)
         mira = self.agents["mira"]
-        in_stock = [it for it in self.stock if it["qty"] > 0]
+        in_stock = [it for it in self.stock if it["qty"] > 2]
         if not in_stock:
             mira.remember("The shelves are bare and customers left empty-handed.", 4)
             self.event("Townsfolk found the shelves bare and went away")
@@ -355,7 +372,7 @@ class World:
                 return f"worked the farm and now holds {ag.inventory[ag.produces]} {ag.produces}"
 
             # an employee is paid out of their employer's actual purse
-            boss = self.agents.get(ag.employer)
+            boss = self.party(ag.employer)
             if boss:
                 paid = self.pay(boss, ag, ag.wage, "wages")
                 if paid:
@@ -374,7 +391,7 @@ class World:
             ag.energy = min(100, ag.energy + 25)
             return "rested"
 
-        other = self.agents.get(target.lower())
+        other = self.party(target)
 
         if action == "talk_to":
             if not other:
@@ -475,15 +492,29 @@ class World:
                 return "cannot trade with themselves"
             seller, buyer = (other, ag) if action == "buy_from" else (ag, other)
 
-            have = next((k for k in seller.inventory if k.lower() == (name or "").lower()), None)
-            stockpile = seller.inventory.get(have, 0) if have else 0
-            if not have or stockpile <= 0:
-                who = "had no" if seller is ag else f"{seller.name} had no"
-                return f"{who} {name or 'goods'} to sell"
+            # the shopkeeper sells off the shelves, not out of her pockets
+            shelf = self.stock_of(name) if seller.id == "mira" else None
+            if shelf is None and seller.id == "mira":
+                shelf = self.shop_item(name)
+            if shelf is not None:
+                have, stockpile = shelf["name"], shelf["qty"]
+                if stockpile <= 0:
+                    seller.remember(f"I am out of {have} and turned away a sale.", 3)
+                    return f"{seller.name} had no {have} left on the shelf"
+            else:
+                have = next((k for k in seller.inventory if k.lower() == (name or "").lower()), None)
+                stockpile = seller.inventory.get(have, 0) if have else 0
+                if not have or stockpile <= 0:
+                    who = "had no" if seller is ag else f"{seller.name} had no"
+                    return f"{who} {name or 'goods'} to sell"
 
             if unit is None:
-                unit = max(1, round(self.prices.get(have, 5) * 0.6))
+                unit = self.prices.get(have, 5) if shelf is not None else round(self.prices.get(have, 5) * 0.6)
             unit = max(1, int(unit))
+            # she will haggle, but never below cost and never above 3x it —
+            # the same ceiling set_price obeys, so a greedy mood cannot become a fleecing
+            if shelf is not None:
+                unit = max(shelf["cost"], min(shelf["cost"] * 3, unit))
 
             # fill as much of the order as the seller holds and the buyer can pay for
             wanted = qty
@@ -496,7 +527,10 @@ class World:
 
             total = qty * unit
             self.pay(buyer, seller, total, f"{qty}x {have} @ {unit}c")
-            seller.inventory[have] = stockpile - qty
+            if shelf is not None:
+                shelf["qty"] = stockpile - qty
+            else:
+                seller.inventory[have] = stockpile - qty
 
             shortfall = ""
             if qty < wanted:
@@ -579,58 +613,79 @@ class World:
             return f"hired {other.name} at {wage} coins a shift"
 
         if action == "lend":
-            if ag.id != "bram":
-                return "is not the bank and cannot lend"
             if not other:
                 return "had nobody to lend to"
+            if other.id == ag.id:
+                return "cannot lend to themselves"
             try:
-                amount = max(1, min(80, int(float(arg))))
+                amount = max(1, min(80, int(float(str(arg).split(",")[0].strip()))))
             except (TypeError, ValueError):
                 amount = 20
-            outstanding = other.debts.get("bram", 0)
-            if outstanding + amount > 120:
-                return f"refused — {other.name} is already {outstanding}c deep"
-            # keep a working float so the player can always still get a loan
-            if self.bank_reserves - amount < 80:
-                return "the bank did not have the reserves"
-            owed = round(amount * (1 + self.interest_rate))
-            self.bank_reserves -= amount
-            other.cash += amount
-            other.debts["bram"] = other.debts.get("bram", 0) + owed
-            other.remember(f"Bram lent me {amount} coins; I owe {owed} back.", 3, source="bram")
-            ag.remember(f"I lent {other.name} {amount} coins at {int(self.interest_rate*100)}%.", 3)
-            self.flows.append({"t": time.strftime("%H:%M:%S"), "from": "Bank",
-                               "to": other.name, "amount": amount, "why": "loan"})
-            self.event(f"Bram lent {other.name} {amount} coins, {owed} due back")
-            return f"lent {other.name} {amount} coins, {owed} due back at {int(self.interest_rate*100)}% interest"
+            owed_already = other.debts.get(ag.id, 0)
+
+            if ag.id == "bram":
+                # the bank lends out of its reserves, at the bank's rate
+                if owed_already + amount > 120:
+                    return f"refused — {other.name} is already {owed_already} deep with the bank"
+                if self.bank_reserves - amount < 80:
+                    return "the bank did not have the reserves"
+                rate = self.interest_rate
+                self.bank_reserves -= amount
+                other.cash += amount
+                source = "Bank"
+            else:
+                # anyone can front a friend money out of their own pocket
+                if ag.cash < amount:
+                    return f"could not spare {amount} coins"
+                if owed_already + amount > 60:
+                    return f"refused — {other.name} already owes them {owed_already}"
+                rate = 0.0
+                self.pay(ag, other, amount, "a loan between friends")
+                source = ag.name
+
+            owed = round(amount * (1 + rate))
+            other.debts[ag.id] = owed_already + owed
+            terms = f" at {int(rate * 100)}% interest" if rate else ""
+            other.remember(f"{ag.name} lent me {amount} coins; I owe {owed} back.", 3, source=ag.id)
+            ag.remember(f"I lent {other.name} {amount} coins{terms}. They owe me {owed}.", 3)
+            if source == "Bank":
+                self.flows.append({"t": time.strftime("%H:%M:%S"), "from": "Bank",
+                                   "to": other.name, "amount": amount, "why": "loan"})
+            self.event(f"{ag.name} lent {other.name} {amount} coins, {owed} due back")
+            return f"lent {other.name} {amount} coins, {owed} due back{terms}"
 
         if action == "repay":
-            creditor = target.lower() or "bram"
-            owed = ag.debts.get(creditor, 0)
+            creditor = self.party(target) or self.agents.get("bram")
+            if creditor is None:
+                return "owed nothing to anyone"
+            owed = ag.debts.get(creditor.id, 0)
             if owed <= 0:
-                return "owed nothing"
-            pay = min(ag.cash, owed)
+                return f"owed {creditor.name} nothing"
+            try:
+                offer = int(float(str(arg).split(",")[0].strip()))
+            except (TypeError, ValueError):
+                offer = owed
+            pay = max(0, min(ag.cash, owed, offer))
             if pay <= 0:
-                return "could not afford to repay anything"
+                return f"could not afford to repay {creditor.name} anything"
             ag.cash -= pay
-            ag.debts[creditor] = owed - pay
-            if creditor == "bram":
-                self.bank_reserves += pay
-            elif creditor in self.agents:
-                self.agents[creditor].cash += pay
-            if creditor in self.agents:
-                self.adjust_trust(self.agents[creditor], ag.id, 0.25)
+            ag.debts[creditor.id] = owed - pay
+            if creditor.id == "bram":
+                self.bank_reserves += pay          # the bank's money goes back to reserves
+            else:
+                creditor.cash += pay
+            self.adjust_trust(creditor, ag.id, 0.25)
             self.flows.append({"t": time.strftime("%H:%M:%S"), "from": ag.name,
-                               "to": creditor.title(), "amount": pay, "why": "repayment"})
-            left = ag.debts[creditor]
-            self.event(f"{ag.name} repaid {pay}c to {creditor.title()}"
-                       + (f" ({left}c still owing)" if left else " — debt cleared"))
-            return f"repaid {pay} coins to {creditor.title()}, {left} still owing"
+                               "to": creditor.name, "amount": pay, "why": "repayment"})
+            left = ag.debts[creditor.id]
+            self.event(f"{ag.name} repaid {creditor.name} {pay} coins"
+                       + (f", {left} still owing" if left else " and cleared the debt"))
+            return f"repaid {creditor.name} {pay} coins, {left} still owing"
 
         if action == "restock":
             if ag.id != "mira":
                 return "does not run the shop"
-            if time.time() - ag.last_restock < 90:
+            if time.time() - ag.last_restock < 35:
                 return "had already restocked recently"
             if len(self.stock) >= 14 and not self.stock_of((arg or target or "").strip()):
                 return "had no shelf space for anything new"
@@ -638,36 +693,47 @@ class World:
             if len(query) < 3:
                 return "could not think what to restock"
             ag.last_restock = time.time()
-            try:
-                found = catalog.search(query, limit=1)
-            except Exception as e:
-                return f"the supplier catalogue was unreachable ({e})"
-            if not found:
-                return f"found nothing for '{query}'"
-            item = found[0]
-            unit_cost = max(1, round(item["price"] * 0.6))
-            units = 3
+
+            # The catalogue is fetched off the event loop and kept in a pool, so a slow
+            # supplier can never stall the town mid-tick.
+            match = None
+            for o in self.offers:
+                if query.lower() in o["name"].lower() or o["name"].lower() in query.lower():
+                    match = o; break
+            if match is None and self.offers:
+                match = self.offers[0]
+            if match is None:
+                if query not in self.wanted:
+                    self.wanted.append(query)
+                return f"sent word to the supplier about '{query}' and is waiting on a price"
+
+            self.offers.remove(match)
+            if query not in self.wanted:
+                self.wanted.append(query)          # keep the pool stocked with what she asks for
+
+            unit_cost = max(1, round(match["price"] * 0.6))
+            units = 6
             bill = unit_cost * units
             if ag.cash < bill:
-                return (f"found {item['name']} at {unit_cost}c wholesale but needed {bill}c "
-                        f"for a case and only had {ag.cash}c")
+                return (f"found {match['name']} at {unit_cost} coins wholesale but needed {bill} "
+                        f"for a case and only had {ag.cash}")
             ag.cash -= bill
             self.flows.append({"t": time.strftime("%H:%M:%S"), "from": ag.name,
-                               "to": "Supplier", "amount": bill, "why": f"wholesale {item['name']}"})
-            existing = self.stock_of(item["name"])
+                               "to": "Supplier", "amount": bill, "why": f"wholesale {match['name']}"})
+            existing = self.stock_of(match["name"])
             if existing:
                 existing["qty"] += units
                 existing["cost"] = unit_cost
             else:
-                item["cost"] = unit_cost
-                item["qty"] = units
-                self.stock.append(item)
-                self.prices[item["name"]] = item["price"]
-                self.base_prices[item["name"]] = item["price"]
-            self.event(f"Mira took delivery of {units} {item['name']} at {unit_cost} coins "
-                       f"each, {bill} in all: {item['real_title'][:34]}")
-            return (f"bought {units} {item['name']} from the supplier at {unit_cost}c each "
-                    f"({bill}c total), shelved at {self.prices[item['name']]}c")
+                match["cost"] = unit_cost
+                match["qty"] = units
+                self.stock.append(match)
+                self.prices[match["name"]] = match["price"]
+                self.base_prices[match["name"]] = match["price"]
+            self.event(f"Mira took delivery of {units} {match['name']} at {unit_cost} coins "
+                       f"each, {bill} in all: {match['real_title'][:34]}")
+            return (f"bought {units} {match['name']} from the supplier at {unit_cost} coins each "
+                    f"({bill} in all), shelved at {self.prices[match['name']]}")
 
         # anything the model invented that the world does not implement
         ag.energy = min(100, ag.energy + 5)
@@ -700,7 +766,9 @@ class World:
                 "debt": sum(a.debts.values()),
                 "employer": a.employer, "wage": a.wage, "produces": a.produces,
             } for a in self.agents.values()],
-            "player": self.player,
+            "player": {"x": round(self.you.x, 2), "y": round(self.you.y, 2),
+                       "cash": self.you.cash, "inventory": self.you.inventory,
+                       "name": self.you.name},
             "shop": [{**it, "price": self.prices.get(it["name"], it["price"])} for it in self.stock],
             "bank_reserves": self.bank_reserves,
             "interest_rate": self.interest_rate,
@@ -708,8 +776,8 @@ class World:
             "price_mult": round(self.price_mult, 2),
             "conversations": [{
                 "id": c.id, "a": c.a, "b": c.b, "closed": c.closed,
-                "names": [self.agents[c.a].name, self.agents[c.b].name],
-                "colors": [self.agents[c.a].color, self.agents[c.b].color],
+                "names": [self.party(c.a).name, self.party(c.b).name],
+                "colors": [self.party(c.a).color, self.party(c.b).color],
                 "lines": c.lines,
             } for c in self.conversations[-8:]],
             "log": self.log[-40:],
