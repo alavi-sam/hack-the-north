@@ -4,6 +4,37 @@ A 2D pixel town where every resident is an AI agent with a personality, goals, m
 
 ---
 
+## 0. Running it
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cp .env.example .env     # then put your key in
+.venv/bin/uvicorn server:app --reload --port 8000
+```
+
+Open <http://localhost:8000>. WASD to walk, `E` to select the nearest resident, then type
+in the bottom bar — **Talk** speaks to them, **Whisper rumour** plants one. The right panel
+has Talk / Minds / Relations / Shop / Log; the god buttons force events.
+
+**Talk** is the tab to watch: agent dialogue is threaded per pair, newest first, so you can
+follow one negotiation instead of reading interleaved chatter. A thread runs up to 6 lines
+with strict turn-taking, then closes (each side keeps a summarising memory) and that pair
+goes quiet for 50s. The Log is economy and rumours only.
+
+**Files:** `server.py` (WebSocket + two-tier loop) · `world.py` (state, economy, action
+validation) · `llm.py` (model client) · `catalog.py` (Shopify Global Catalog) ·
+`static/index.html` (whole frontend).
+
+`.env` keys: `LLM_API_KEY`, `LLM_MODEL`, optional `LLM_BASE_URL`, `LLM_FALLBACK_MODELS`,
+`LLM_CONCURRENCY`, `SLOW_SECONDS`.
+
+> **Model note:** free OpenRouter models are rate-limited hard and several are reasoners
+> that return empty completions. `llm.py` disables reasoning tokens and falls through a
+> model chain; if every model fails an agent acts on instinct instead of freezing. For the
+> demo, use a paid model — `inclusionai/ling-3.0-flash-vl:free` was the most reliable free one.
+
+---
+
 ## 1. Overview
 
 **One-liner:** *A tiny society run by AI agents, where the shop is a real Shopify store and you can poke the economy.*
@@ -79,13 +110,122 @@ When A gossips to B about C, B stores it as a memory with a source. B's trust in
 
 ---
 
-## 4. The economy (small, rule-based, not LLM)
+## 4. The economy — a closed supply chain
+
+Every coin in the town is a **transfer between two purses**. Nothing is minted except
+ordinary townsfolk shopping at Mira's (`world.townsfolk_tick`), which is the only money
+entering the system. `World.pay()` is the single chokepoint every transfer goes through,
+so the ledger cannot drift.
+
+```
+Townsfolk ──buy at retail──▶ Mira (merchant)
+                              │  ▲
+        pays wages from her   │  │ buys wholesale (from Fig, or the Shopify supplier)
+        own purse             ▼  │
+                            Wren ──spends wages──▶ the shop
+Fig (supplier) ──grows goods with `work`, sells them──▶ Mira
+Bram (bank) ──lends at 20%──▶ anyone; profits only when the debt is repaid
+Kit ──no job, no goods──▶ must borrow, con, or talk coin out of people
+```
+
+- **Producers** (`Fig`) turn `work` into *goods*, not coin. They only earn by selling.
+- **Employees** (`Wren`) are paid **out of their employer's actual cash**. If Mira is broke,
+  payroll is missed, trust drops, and it lands in the Log. `hire` can poach someone off a
+  rival, which costs the rival a chunk of trust.
+- **The shop has finite stock.** Items carry a `cost` and a `qty`; they sell out. Mira's
+  `set_price` is bounded to between cost and 3× cost, so her "overprice when nobody
+  compares" flaw is a real, visible price change rather than flavour text.
+- **Loans carry interest.** `lend` records principal × 1.2 as the debt; `repay` pays it
+  down and the interest lands in the bank's reserves.
+- **Deals execute.** `sell_to` / `buy_from` / `pay` let a negotiation end in a transaction —
+  a bribe, hush money, or a haggled price. Without these the conversations were theatre.
+
+### 4b. Original notes (rule-based, not LLM)
 
 - **Items:** ~8-10 goods. Shop items come from the Global Catalog (see §5); produce (bread, apples) is local.
 - **Prices:** Merchant sets prices (LLM decision), bounded by rules (can't go below cost or above 3x). Demand pressure nudges suggested price.
 - **Wages:** Workers earn per work cycle from whoever employs them.
 - **Bank:** Holds reserves, lends at a rate Bram picks (LLM decision, bounded). Missed repayment => default => trust collapses in memory of the town.
 - **Ledger:** One authoritative server-side ledger. Agents only see what their memories say.
+
+---
+
+## 4c. Days, nights and elections
+
+**The clock.** A day lasts `DAY_SECONDS` (default 240s). At dusk everyone walks home and
+sleeps — sleeping costs no tokens, which also keeps the nights cheap. Kit the drifter is the
+exception: he keeps his own hours and works the dark alone. Standing next to a sleeper wakes
+them. The map takes a night wash and lamps come on in the windows.
+
+**The exchange.** Every shop is cut into 20 shares, and a quarter of each is on the market
+from the start, so there is something to trade on day one. A share is valued off the books you
+already have — stock at cost plus a multiple of the day's takings — and the quoted price eases
+toward that, leaning on what the town believes.
+
+- `issue_shares(n)` lets an owner float part of their own stake to raise coin at once. It is a
+  second route to capital beside Bram's loans, at the cost of keeping less of the profit.
+- `buy_shares` / `sell_shares` deal against the exchange, which always stands ready, so there
+  is never a missing counterparty. Trades move the price.
+- Profitable shops pay a dividend on the day's takings, split across the holders.
+
+**This is what finally gives gossip teeth.** Rumours spread well but moved nothing measurable
+— now a rumour naming a shopkeeper drags their shares, weighted by how much the listener
+trusts the teller. Whisper that Mira waters her milk and the ticker drops: her standing reads
+"talked down", and anyone holding her stock is out of pocket. Buying in before you start the
+talk is a strategy the rules permit, and Kit is exactly the sort to work it out.
+
+Elections bite here too: a `cheap_bread` cap squeezes margins and shop values with it, while
+`free_market` lifts them.
+
+**The Shopify hustle.** The Global Catalog is not just the shop's opening stock — it is a
+live supplier anyone can buy from. A background task keeps a pool of real listings topped up
+off the MCP endpoint (in a worker thread, so the search never blocks the simulation).
+
+- `source(query)` is open to **any** agent with coin, not just shopkeepers: buy a case of 3
+  real products at wholesale into your own bag and sell them on at a markup
+- shipments are scarce — taking one removes it from the pool, so agents race for the same case
+- a shopkeeper pays a **premium for a line they do not carry** and little for more of what is
+  already piled up, so the margin comes from finding what nobody else has
+- `world.catalogue` remembers the real title, image and product URL behind every name, so a
+  product keeps its Shopify identity however many hands it passes through
+- the player has the same hustle: the Shop tab lists the supplier's real goods with images and
+  case prices, and every good on sale in town carries a "view the real product" link
+
+**Earning as the player.** *Work a shift* must be done **at a workplace** — the farm, the
+shop, the bank or a stall — and takes seven seconds, after which you are paid: 3 coins for odd
+jobs, or your wage if someone has hired you — agents can offer you a job, which arrives as an offer you accept. Anything in
+your bag can be sold to the nearest shopkeeper at wholesale. Vigour limits how hard you can
+work and comes back on its own.
+
+**Social mobility.** Two market pitches sit empty on the map marked "to let". Any agent with
+`STALL_COST` coins can `open_stall`: they leave their employer, become a shopkeeper with
+their own goods, costs and prices, and their goal is rewritten. Buyers — agents, townsfolk
+and the player — go to whichever shop is **cheapest**, so undercutting is a real strategy and
+a markup really costs you custom.
+
+**Politics.** A *Call an election* button on the god panel opens the ballot whenever you want
+one, rather than waiting for the fifth day. Orla (the sitting alderman, quietly funded by shopkeepers) and Devi (an
+agitator for the workers) stand for election every `ELECTION_EVERY` days. They `promise` one
+of four policies and campaign by talking people round. On election day every resident votes
+on **self-interest weighted by trust** — a worker gains from a stipend, an owner from a free
+market, a debtor from cheap credit — and the player gets a ballot too.
+
+The winner's promise becomes law, and the law actually binds:
+
+| Policy | What it changes in the rules |
+|---|---|
+| `cheap_bread` | Food is capped at 4 coins; `set_price` cannot exceed it |
+| `free_market` | Market pitches cost half as much |
+| `workers_stipend` | Everyone without a shop draws 5 coins a day from the treasury |
+| `cheap_credit` | The bank may only charge 10% interest |
+
+The treasury fills from a 10% levy on townsfolk purchases, so a promise can bankrupt the town
+that voted for it.
+
+**Conversations are lasting.** Each pair of people has one thread that is never discarded —
+exchanges open and close inside it, but the history stays. Your own chats persist per person
+and are shown back to the agent when they reply, so you can pick a conversation up where you
+left it. The Talk tab filters by person, or by "Your chats".
 
 ---
 
