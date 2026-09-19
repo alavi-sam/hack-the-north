@@ -3,6 +3,7 @@ import math, os, random, time, json
 from dataclasses import dataclass, field
 
 import catalog
+from simulation_clock import clock
 
 TILE = 24
 MAP_W, MAP_H = 34, 20
@@ -172,7 +173,7 @@ class Agent:
     promise: str = ""       # the policy they are running on
 
     def remember(self, text, importance=1, source="self"):
-        self.memories.append(Memory(text, time.time(), importance, source))
+        self.memories.append(Memory(text, clock.time(), importance, source))
         if len(self.memories) > 60:
             self.memories = self.memories[-60:]
 
@@ -180,7 +181,7 @@ class Agent:
         """Important first, recent second. Decay is logarithmic, so something that
         mattered an hour ago still outranks a trivial thing from a minute ago —
         a linear decay made agents forget their own deals within minutes."""
-        now = time.time()
+        now = clock.time()
         scored = sorted(
             self.memories,
             key=lambda m: m.importance * 5 - math.log1p(max(0, now - m.t) / 60) * 3,
@@ -190,7 +191,7 @@ class Agent:
 
     def speak(self, text, seconds=6.0):
         self.say = text[:120]
-        self.say_until = time.time() + seconds
+        self.say_until = clock.time() + seconds
 
 
 def make_agents():
@@ -298,12 +299,16 @@ class World:
         self.catalogue = {g["name"]: dict(g) for g in goods if g.get("url")}
         self.price_mult = 1.0
         self.log = []
+        self.speed = 1
+        self.speedup = None
+        self.speedup_summary = None
+        self.summary_seq = 0
         self.conversations = []
         self.convo_seq = 0
         self.convo_cooldown = {}               # frozenset(pair) -> time it may restart
         self.bank_reserves = 300
         self.interest_rate = 0.2      # what Bram charges on a loan
-        self.townsfolk_next = time.time() + 10
+        self.townsfolk_next = clock.time() + 10
         self.flows = []               # recent coin movements, for the Economy panel
         self.last_paid = {}           # (payer, payee) -> time, so handouts cannot loop
         self.offers = []              # supplier goods already fetched, ready to buy
@@ -312,7 +317,7 @@ class World:
         self.last_pitch = {}          # agent id -> when they last pitched the player
         self.wanted = []              # what Mira has asked the supplier for
         self.day = 1
-        self.day_started = time.time()
+        self.day_started = clock.time()
         self.phase = "day"
         self.treasury = 60
         self.mayor = ""
@@ -320,7 +325,7 @@ class World:
         self.election_today = False
         self.ballot_open = False
         self.votes = {}
-        self.started = time.time()
+        self.started = clock.time()
         # The player is an Agent like anyone else — just one the model never drives.
         # Without this, agents had no one to sell to when you asked them to.
         self.you = Agent("stranger", "Stranger", "Newcomer",
@@ -351,13 +356,13 @@ class World:
         # one pitch at a time per person, so the stranger is not buried in cards
         if any(o["from"] == ag.id for o in self.proposals):
             return "already has an offer waiting with the stranger"
-        if time.time() - self.last_pitch.get(ag.id, 0) < 25:
+        if clock.time() - self.last_pitch.get(ag.id, 0) < 25:
             return "had only just pitched the stranger; gave them room to think"
-        self.last_pitch[ag.id] = time.time()
+        self.last_pitch[ag.id] = clock.time()
         self.proposal_seq += 1
         self.proposals.append({"id": self.proposal_seq, "from": ag.id, "name": ag.name,
                                "color": ag.color, "kind": kind, "text": text,
-                               "action": action, "arg": arg, "t": time.time()})
+                               "action": action, "arg": arg, "t": clock.time()})
         self.proposals = self.proposals[-3:]
         self.event(f"{ag.name} put an offer to you: {text}")
         return f"offered the stranger: {text}"
@@ -382,7 +387,7 @@ class World:
         return result
 
     def expire_proposals(self):
-        now = time.time()
+        now = clock.time()
         for p in list(self.proposals):
             if now - p["t"] > 40:
                 self.proposals.remove(p)
@@ -392,7 +397,7 @@ class World:
     def player_work(self):
         you = self.you
         if self.shift:
-            left = max(0, round(self.shift["until"] - time.time()))
+            left = max(0, round(self.shift["until"] - clock.time()))
             return f"You are already at it — {left}s of the shift left."
         if self.phase == "night":
             return "The town is asleep. There is no work to be had until morning."
@@ -403,11 +408,11 @@ class World:
         if where not in self.WORKPLACES or (cx - you.x) ** 2 + (cy - you.y) ** 2 > 16:
             return "There is no work out here. Go to the farm, the shop, the bank or a stall."
         you.energy -= 15
-        self.shift = {"until": time.time() + 7, "boss": you.employer or "", "where": where}
+        self.shift = {"until": clock.time() + 7, "boss": you.employer or "", "where": where}
         return f"You set to work at the {where.replace('_', ' ')}."
 
     def finish_shift(self):
-        if not self.shift or time.time() < self.shift["until"]:
+        if not self.shift or clock.time() < self.shift["until"]:
             return
         job, self.shift = self.shift, None
         you = self.you
@@ -462,7 +467,7 @@ class World:
         self.you.inventory[match["name"]] = self.you.inventory.get(match["name"], 0) + units
         self.flows.append({"t": time.strftime("%H:%M:%S"), "from": self.you.name,
                            "to": "Supplier", "amount": bill, "why": f"case of {match['name']}"})
-        self.event(f"You took a case of {units} {match['name']} for {bill} coins")
+        self.event(f"You took a case of {units} {match['name']} for {bill} coins", "Purchase", bill)
         return f"You bought {units} {match['name']} at {unit} each. Sell them on for more."
 
     def player_sell(self, name):
@@ -504,7 +509,7 @@ class World:
                                "cost": price, "qty": qty})
         keeper.remember(f"I bought {qty} {have} off the stranger at {price} each.", 3,
                         source="stranger")
-        self.event(f"You sold {keeper.name} {qty} {have} at {price} each, {total} in all")
+        self.event(f"You sold {keeper.name} {qty} {have} at {price} each, {total} in all", "Purchase", total)
         left = you.inventory[have]
         return (f"{keeper.name} paid you {total} coins for {qty} {have}"
                 + (f"; {left} still in your bag." if left else "."))
@@ -613,7 +618,7 @@ class World:
                     holder.cash += cut
                     holder.remember(f"{sh.name} paid me {cut} coins in dividend.", 3)
             self.exchange["cash"] += round(pot * self.float_of(sh) / SHARES)
-            self.event(f"{sh.name} paid {pot} coins of dividend on the day's takings")
+            self.event(f"{sh.name} paid {pot} coins of dividend on the day's takings", "Dividend")
             sh.takings = 0
 
     def may_trade(self, ag):
@@ -668,7 +673,42 @@ class World:
     def stock_of(self, name):
         return self.cheapest(name, in_stock=False)[1]
 
-    def event(self, text):
+    def set_speed(self, speed):
+        if type(speed) is not int or speed not in (1, 5, 10, 20):
+            return
+        if speed > 1 and self.speed == 1:
+            self.speedup = {"day": self.day, "started": clock.time(), "events": [],
+                            "omitted": 0,
+                            "prices": {s.owner: s.share_price for s in self.shops}}
+            self.speedup_summary = None
+        elif speed == 1 and self.speed > 1:
+            run = self.speedup
+            markets = []
+            for shop in self.shops:
+                before = run["prices"].get(shop.owner)
+                after = round(shop.share_price, 2)
+                if before is None or abs(after - before) >= 0.01:
+                    markets.append({"name": shop.name,
+                                    "before": round(before, 2) if before is not None else None,
+                                    "after": after,
+                                    "percent": round((shop.share_price / before - 1) * 100, 1)
+                                               if before else None})
+            self.summary_seq += 1
+            self.speedup_summary = {"id": self.summary_seq, "from_day": run["day"],
+                                   "to_day": self.day,
+                                   "hours": round((clock.time() - run["started"]) / DAY_SECONDS * 24, 1),
+                                   "events": run["events"], "omitted": run["omitted"],
+                                   "markets": markets}
+            self.speedup = None
+        self.speed = speed
+
+    def event(self, text, category=None, amount=None):
+        # Keep the recap independent of the rolling news log. A major purchase is 20+ coins.
+        if self.speedup is not None and category and (amount is None or amount >= 20):
+            if len(self.speedup["events"]) < 200:
+                self.speedup["events"].append({"day": self.day, "category": category, "text": text})
+            else:
+                self.speedup["omitted"] += 1
         self.log.append({"t": time.strftime("%H:%M:%S"), "text": text})
         if len(self.log) > 120:
             self.log = self.log[-120:]
@@ -694,7 +734,7 @@ class World:
         if not create:
             return None
         self.convo_seq += 1
-        c = Conversation(self.convo_seq, a_id, b_id, started=time.time(), last_t=time.time())
+        c = Conversation(self.convo_seq, a_id, b_id, started=clock.time(), last_t=clock.time())
         self.conversations.append(c)
         return c
 
@@ -705,7 +745,7 @@ class World:
         if len(c.lines) > 80:
             c.lines = c.lines[-80:]
             c.session_from = max(0, c.session_from - 1)
-        c.last_t = time.time()
+        c.last_t = clock.time()
         return c
 
     def open_convo(self, a_id, b_id):
@@ -717,7 +757,7 @@ class World:
     def close_convo(self, c):
         """End the current exchange. The thread and its history remain."""
         c.closed = True
-        self.convo_cooldown[c.pair] = time.time() + CONVO_COOLDOWN
+        self.convo_cooldown[c.pair] = clock.time() + CONVO_COOLDOWN
         a, b = self.party(c.a), self.party(c.b)
         if not (a and b):
             return
@@ -730,7 +770,7 @@ class World:
                 note += f" I said: {mine[-1]}"
             me.remember(note + " If we agreed anything, act on it now.", 4, source=them.id)
             self.adjust_trust(me, them.id, 0.04)
-            me.next_tick = min(me.next_tick, time.time() + 2.0)
+            me.next_tick = min(me.next_tick, clock.time() + 2.0)
 
     def convo_transcript(self, ag, limit=8):
         """The open conversation this agent is in, rendered for their prompt."""
@@ -777,7 +817,7 @@ class World:
 
     def clock(self):
         """How far through the day we are, 0 at dawn and 1 at the end of night."""
-        return ((time.time() - self.day_started) % DAY_SECONDS) / DAY_SECONDS
+        return ((clock.time() - self.day_started) % DAY_SECONDS) / DAY_SECONDS
 
     def is_night(self):
         return self.clock() >= NIGHT_FROM
@@ -787,14 +827,14 @@ class World:
         was_night = self.phase == "night"
         now_night = self.is_night()
 
-        if time.time() - self.day_started >= DAY_SECONDS:
+        if clock.time() - self.day_started >= DAY_SECONDS:
             self.day_started += DAY_SECONDS
             self.day += 1
             self.phase = "day"
             for ag in self.agents.values():
                 ag.energy = min(100, ag.energy + 55)      # a night's sleep
                 ag.remember(f"Day {self.day} began.", 2)
-                ag.next_tick = min(ag.next_tick, time.time() + random.uniform(0, 4))
+                ag.next_tick = min(ag.next_tick, clock.time() + random.uniform(0, 4))
             self.event(f"Day {self.day} — the town wakes.")
             self.on_new_day()
             return
@@ -855,7 +895,7 @@ class World:
         pitch = "; ".join(f"{c.name} would {POLICIES[c.promise]['pitch']}" for c in self.candidates())
         for ag in self.agents.values():
             ag.remember(f"Election day. {pitch}. I must decide who to back.", 5)
-            ag.next_tick = min(ag.next_tick, time.time() + random.uniform(0, 5))
+            ag.next_tick = min(ag.next_tick, clock.time() + random.uniform(0, 5))
         self.event(f"ELECTION DAY — {pitch}")
 
     def stands_to_gain(self, voter, policy):
@@ -903,10 +943,10 @@ class World:
         capped = self.enforce_policy()
 
         score = ", ".join(f"{c.name} {tally[c.id]}" for c in cands)
-        self.event(f"ELECTION RESULT — {winner.name} won ({score}). New law: {law}")
+        self.event(f"ELECTION RESULT — {winner.name} won ({score}). New law: {law}", "Election")
         for ag in self.agents.values():
             ag.remember(f"{winner.name} won the election. The law now says: {law}", 5)
-            ag.next_tick = min(ag.next_tick, time.time() + random.uniform(0, 6))
+            ag.next_tick = min(ag.next_tick, clock.time() + random.uniform(0, 6))
         winner.remember(f"I won. I promised to {POLICIES[self.policy]['pitch']} "
                         f"and now I must live with it.", 5)
         for c in cands:
@@ -923,7 +963,7 @@ class World:
             if self.shop_of(ag.id) or ag.politician:
                 continue
             if self.treasury < 5:
-                self.event("The treasury is empty; no stipend was paid today.")
+                self.event("The treasury is empty; no stipend was paid today.", "Treasury")
                 return
             self.treasury -= 5
             ag.cash += 5
@@ -941,12 +981,12 @@ class World:
     def townsfolk_tick(self):
         """The five residents are not the whole town. Ordinary townsfolk shop at Mira's,
         which is the only coin entering the economy — everything else is a transfer."""
-        if time.time() < self.townsfolk_next:
+        if clock.time() < self.townsfolk_next:
             return
         if self.phase == "night":
-            self.townsfolk_next = time.time() + 8
+            self.townsfolk_next = clock.time() + 8
             return
-        self.townsfolk_next = time.time() + random.uniform(14, 22)
+        self.townsfolk_next = clock.time() + random.uniform(14, 22)
         on_sale = [(sh, g) for sh, g in self.all_goods() if g["qty"] > 2]
         if not on_sale:
             for sh in self.shops:
@@ -976,7 +1016,7 @@ class World:
         if len(self.flows) > 40:
             self.flows = self.flows[-40:]
         self.event(f"A townsfolk bought {good['name']} at {shop.name} for {price} coins, "
-                   f"{good['qty']} left")
+                   f"{good['qty']} left", "Purchase", price)
 
     # ---------- fast tick: movement only, never waits on the LLM ----------
     def step(self, dt):
@@ -993,7 +1033,7 @@ class World:
                 speed = 1.8 * dt
                 ag.x += dx / dist * min(speed, dist)
                 ag.y += dy / dist * min(speed, dist)
-            if ag.say and time.time() > ag.say_until:
+            if ag.say and clock.time() > ag.say_until:
                 ag.say = ""
 
     # ---------- action validation: the LLM proposes, the world decides ----------
@@ -1055,13 +1095,13 @@ class World:
             convo = self.active_convo(ag.id, other.id)
             if convo is None:
                 until = self.convo_cooldown.get(frozenset((ag.id, other.id)), 0)
-                if time.time() < until:
+                if clock.time() < until:
                     return f"had nothing further to say to {other.name} just yet"
                 convo = self.open_convo(ag.id, other.id)
 
             # one speaker at a time: never talk over a reply you have not had yet
             if convo.lines and convo.lines[-1]["speaker"] == ag.id:
-                other.next_tick = min(other.next_tick, time.time() + 1.0)
+                other.next_tick = min(other.next_tick, clock.time() + 1.0)
                 return f"waited for {other.name} to answer"
 
             self.say_into(ag, other, line)
@@ -1073,7 +1113,7 @@ class World:
                 self.close_convo(convo)
                 return f"finished talking with {other.name}"
             # let them answer while it is still their turn to care
-            other.next_tick = min(other.next_tick, time.time() + 2.5)
+            other.next_tick = min(other.next_tick, clock.time() + 2.5)
             return f"said to {other.name}: {line[:40]}"
 
         if action == "gossip":
@@ -1115,7 +1155,7 @@ class World:
             shop.takings += price
             ag.inventory[good["name"]] = ag.inventory.get(good["name"], 0) + 1
             self.event(f"{ag.name} bought {good['name']} from {shop.name} for {price} coins, "
-                       f"{good['qty']} left")
+                       f"{good['qty']} left", "Purchase", price)
             return f"bought {good['name']} from {shop.name} for {price} coins"
 
         if action in ("pay", "give", "bribe"):
@@ -1129,11 +1169,11 @@ class World:
             except (TypeError, ValueError):
                 return "did not name an amount to hand over"
             recent = self.last_paid.get((ag.id, other.id), 0)
-            if time.time() - recent < 30:
+            if clock.time() - recent < 30:
                 return f"had already handed {other.name} coin a moment ago"
             if not self.pay(ag, other, amount, "handed over coin"):
                 return f"could not find {amount} coins to give {other.name}"
-            self.last_paid[(ag.id, other.id)] = time.time()
+            self.last_paid[(ag.id, other.id)] = clock.time()
             other.remember(f"{ag.name} paid me {amount} coins.", 3, source=ag.id)
             ag.remember(f"I paid {other.name} {amount} coins.", 3)
             self.adjust_trust(other, ag.id, 0.12)
@@ -1220,11 +1260,11 @@ class World:
                         "url": listing.get("url", ""), "image": listing.get("image", ""),
                         "price": retail, "base": retail, "cost": unit, "qty": qty})
                 self.event(f"{seller.name} supplied {buyers_shop.name} with {qty} {have} "
-                           f"at {unit} coins each, {total} in all{shortfall}")
+                           f"at {unit} coins each, {total} in all{shortfall}", "Purchase", total)
             else:
                 buyer.inventory[have] = buyer.inventory.get(have, 0) + qty
                 self.event(f"{seller.name} sold {buyer.name} {qty} {have} "
-                           f"at {unit} coins each, {total} in all{shortfall}")
+                           f"at {unit} coins each, {total} in all{shortfall}", "Purchase", total)
             self.adjust_trust(buyer, seller.id, 0.08)
             self.adjust_trust(seller, buyer.id, 0.08)
             verb = "bought" if action == "buy_from" else "sold"
@@ -1380,14 +1420,14 @@ class World:
             shop = self.shop_of(ag.id)
             if shop is None:
                 return "keeps no shop to restock"
-            if time.time() - ag.last_restock < 35:
+            if clock.time() - ag.last_restock < 35:
                 return "had already restocked recently"
             query = (arg or target or "wool scarf").strip()
             if len(query) < 3:
                 return "could not think what to restock"
             if len(shop.goods) >= 14 and not shop.good(query):
                 return "had no shelf space for anything new"
-            ag.last_restock = time.time()
+            ag.last_restock = clock.time()
 
             match = None
             for o in self.offers:
@@ -1425,7 +1465,7 @@ class World:
                 shop.goods.append(match)
                 shelf_price = match["price"]
             self.event(f"{ag.name} took delivery of {units} {match['name']} at {unit_cost} coins "
-                       f"each, {bill} in all: {match['real_title'][:34]}")
+                       f"each, {bill} in all: {match['real_title'][:34]}", "Purchase", bill)
             return (f"bought {units} {match['name']} from the supplier at {unit_cost} coins each "
                     f"({bill} in all), shelved at {shelf_price}")
 
@@ -1456,7 +1496,7 @@ class World:
                 if other.id != ag.id:
                     other.remember(f"{ag.name} put {n} shares of {shop.name} on the market "
                                    f"at {price}.", 3, source=ag.id)
-            self.event(f"{ag.name} floated {n} shares of {shop.name} at {price}, raising {raised}")
+            self.event(f"{ag.name} floated {n} shares of {shop.name} at {price}, raising {raised}", "Stock offering")
             return (f"floated {n} shares of {shop.name} at {price} each and raised {raised} coins. "
                     f"You still hold {shop.holders[ag.id]} of {SHARES}.")
 
@@ -1514,7 +1554,7 @@ class World:
                                "why": f"case of {match['name']}"})
             ag.remember(f"I bought {units} {match['name']} at {unit_cost} each to sell on.", 4)
             self.event(f"{ag.name} took a case of {units} {match['name']} off the supplier "
-                       f"for {bill} coins — {match['real_title'][:34]}")
+                       f"for {bill} coins — {match['real_title'][:34]}", "Purchase", bill)
             return (f"bought {units} {match['name']} from the supplier at {unit_cost} each "
                     f"({bill} in all). Sell them on for more than that.")
 
@@ -1581,7 +1621,7 @@ class World:
             for other in self.agents.values():
                 if other.id != ag.id:
                     other.remember(f"{ag.name} has opened {name} in the market.", 3, source=ag.id)
-            self.event(f"{ag.name} opened {name} — working for themselves now")
+            self.event(f"{ag.name} opened {name} — working for themselves now", "New business")
             return (f"opened {name} for {self.stall_cost()} coins. The shelves are empty — "
                     f"restock, or buy stock off Fig, then set prices")
 
@@ -1604,6 +1644,8 @@ class World:
     def snapshot(self):
         return {
             "type": "state",
+            "speed": self.speed,
+            "speedup_summary": self.speedup_summary,
             "day": self.day,
             "clock": round(self.clock(), 3),
             "phase": self.phase,
@@ -1621,7 +1663,7 @@ class World:
             "player": {"x": round(self.you.x, 2), "y": round(self.you.y, 2),
                        "cash": self.you.cash, "inventory": self.you.inventory,
                        "name": self.you.name, "energy": round(self.you.energy),
-                       "shift": (max(0, round(self.shift["until"] - time.time()))
+                       "shift": (max(0, round(self.shift["until"] - clock.time()))
                                  if self.shift else 0),
                        "employer": self.you.employer, "wage": self.you.wage,
                        "employer_name": (self.party(self.you.employer).name

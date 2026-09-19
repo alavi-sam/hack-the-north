@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 
 import catalog
 import llm
+from simulation_clock import clock
 from world import World, ACTIONS, PLACES, nearest_place
 
 HERE = pathlib.Path(__file__).parent
@@ -172,7 +173,7 @@ async def _agent_tick(ag):
         ag.energy = min(100, ag.energy + 22)
         ag.thought = "Asleep."
         ag.last_action = "slept"
-        ag.next_tick = time.time() + SLOW_SECONDS * 1.6
+        ag.next_tick = clock.time() + SLOW_SECONDS * 1.6
         return
 
     text = await llm.chat(SYSTEM, build_prompt(ag), max_tokens=300)
@@ -193,17 +194,25 @@ async def _agent_tick(ag):
 async def sim_loop():
     # stagger the first decision of each agent so calls do not bunch up
     for i, ag in enumerate(world.agents.values()):
-        ag.next_tick = time.time() + 1.5 + i * (SLOW_SECONDS / len(world.agents))
+        ag.next_tick = clock.time() + 1.5 + i * (SLOW_SECONDS / len(world.agents))
 
-    last = time.time()
+    last = time.monotonic()
+    pending = {}
     while True:
-        now = time.time()
-        world.step(now - last)
-        last = now
+        real_now = time.monotonic()
+        remaining = min(real_now - last, 1.0) * world.speed
+        last = real_now
+        # Small simulation steps preserve nightfall, elections and timed transactions.
+        while remaining > 0:
+            dt = min(remaining, 0.25)
+            clock.advance(dt)
+            world.step(dt)
+            remaining -= dt
+        now = clock.time()
         for ag in world.agents.values():
-            if now >= ag.next_tick:
+            if now >= ag.next_tick and (ag.id not in pending or pending[ag.id].done()):
                 ag.next_tick = now + SLOW_SECONDS + random.uniform(-1.5, 1.5)
-                asyncio.create_task(agent_tick(ag))
+                pending[ag.id] = asyncio.create_task(agent_tick(ag))
         try:
             await broadcast(world.snapshot())
         except Exception as e:
@@ -267,7 +276,10 @@ async def ws_endpoint(ws: WebSocket):
 async def handle(msg):
     kind = msg.get("type")
 
-    if kind == "move":
+    if kind == "speed":
+        world.set_speed(msg.get("speed"))
+
+    elif kind == "move":
         world.you.x = world.you.tx = max(0.5, min(33.5, float(msg.get("x", 17))))
         world.you.y = world.you.ty = max(0.5, min(19.5, float(msg.get("y", 11))))
 
@@ -286,7 +298,7 @@ async def handle(msg):
             hit = world.rumour_hits_market(rumour)
             if hit:
                 world.event(f"Word about {', '.join(hit)} is moving their shares")
-            ag.next_tick = time.time() + 0.5   # react soon
+            ag.next_tick = clock.time() + 0.5   # react soon
 
     elif kind == "buy":
         item = world.shop_item(msg.get("item", ""))
@@ -306,7 +318,7 @@ async def handle(msg):
                     owner.remember(f"The stranger bought {item['name']} for {price} coins.",
                                    2, source="player")
                 item["qty"] -= 1
-                world.event(f"You bought {item['name']} for {price} coins, {item['qty']} left")
+                world.event(f"You bought {item['name']} for {price} coins, {item['qty']} left", "Purchase", price)
                 await broadcast({"type": "open_url", "url": item.get("url", ""), "name": item["name"]})
 
     elif kind == "offer":
@@ -364,7 +376,7 @@ You have {ag.cash} coins. Stay fully in character. Reply with ONE or TWO short s
     ag.remember(f"I told the stranger: {reply}", 1)
     world.say_into(ag, world.you, reply)         # and theirs, kept for good
     # so that "I'll take the boots" can actually become a sale
-    ag.next_tick = min(ag.next_tick, time.time() + 1.5)
+    ag.next_tick = min(ag.next_tick, clock.time() + 1.5)
     world.event(f"{ag.name} said to you: {reply}")
     await broadcast({"type": "reply", "agent": ag.id, "name": ag.name, "text": reply})
 
@@ -380,8 +392,8 @@ def god_event(name):
         reprice(world.price_mult * 0.6)
         for ag in world.agents.values():
             ag.remember("The market crashed. Prices collapsed overnight.", 4)
-            ag.next_tick = time.time() + random.uniform(0, 2)
-        world.event("The market crashed; prices collapsed overnight.")
+            ag.next_tick = clock.time() + random.uniform(0, 2)
+        world.event("The market crashed; prices collapsed overnight.", "Town event")
     elif name == "festival":
         for ag in world.agents.values():
             ag.cash += 15
@@ -389,13 +401,13 @@ def god_event(name):
             ag.remember("A festival came to town. Everyone is in a generous mood.", 3)
             ag.tx, ag.ty = 17, 10
         reprice(1.0)
-        world.event("A festival came to town; everyone drifted to the square and prices settled.")
+        world.event("A festival came to town; everyone drifted to the square and prices settled.", "Town event")
     elif name == "shortage":
         for ag in world.agents.values():
             ag.remember("Word is there is a shortage coming. Stock will run out.", 4)
-            ag.next_tick = time.time() + random.uniform(0, 2)
+            ag.next_tick = clock.time() + random.uniform(0, 2)
         reprice(world.price_mult * 1.7)
-        world.event("Word of a shortage spread; prices spiked.")
+        world.event("Word of a shortage spread; prices spiked.", "Town event")
     elif name == "election":
         if world.ballot_open:
             world.event("The ballot is already open.")
@@ -404,8 +416,8 @@ def god_event(name):
 
     elif name == "stranger":
         world.agents["kit"].remember("A wealthy stranger arrived in town. An opportunity.", 4)
-        world.agents["kit"].next_tick = time.time() + 0.5
-        world.event("A wealthy stranger arrived in town.")
+        world.agents["kit"].next_tick = clock.time() + 0.5
+        world.event("A wealthy stranger arrived in town.", "Town event")
 
 
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")

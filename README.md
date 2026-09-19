@@ -25,13 +25,21 @@ goes quiet for 50s. The Log is economy and rumours only.
 validation) · `llm.py` (model client) · `catalog.py` (Shopify Global Catalog) ·
 `static/index.html` (whole frontend).
 
-`.env` keys: `LLM_API_KEY`, `LLM_MODEL`, optional `LLM_BASE_URL`, `LLM_FALLBACK_MODELS`,
+`.env` keys: `OPENAI_API_KEY`; optional `OPENAI_MODEL` (defaults to `gpt-4.1-nano`),
 `LLM_CONCURRENCY`, `SLOW_SECONDS`.
 
-> **Model note:** free OpenRouter models are rate-limited hard and several are reasoners
-> that return empty completions. `llm.py` disables reasoning tokens and falls through a
-> model chain; if every model fails an agent acts on instinct instead of freezing. For the
-> demo, use a paid model — `inclusionai/ling-3.0-flash-vl:free` was the most reliable free one.
+> **Model note:** agents call OpenAI directly using GPT-4.1 nano, a low-cost model.
+> Requests retry once; if both attempts fail, the agent acts on instinct instead of freezing.
+> Old `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`, and `LLM_FALLBACK_MODELS` settings are ignored.
+
+Use **Time** in the bottom toolbar to run the town at **5×, 10×, or 20×**.
+Choose **Normal** or **End fast-forward & recap** to return to 1× and open the
+collapsible recap at the bottom right of the town. It covers that fast-forward period:
+completed purchases of 20+ coins, election results, new businesses, dividends, stock
+offerings, major town events, and start-to-finish share-price changes, when they occur.
+The recap uses recorded simulation data and requires no AI call. Time controls apply
+to the shared town for all connected players. Faster time can make more agent API calls;
+each agent has at most one decision in flight, with the existing concurrency limit.
 
 ---
 
@@ -275,7 +283,7 @@ The Merchant's stock is pulled from the **Shopify Global Catalog MCP** (`https:/
 | Frontend | **Phaser 3** loaded from CDN in a single HTML page | No build step, fast to start, tilemap + sprite support built in |
 | Backend | **Python + FastAPI + WebSocket** | Python is already on your machine; easy async LLM calls |
 | Realtime | WebSocket pushes world state + events to the client | Client only renders; server owns truth |
-| LLM | Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) for ticks/dialogue; a stronger model for reflection/player chat | Cheap + fast where it's frequent, smart where it's rare |
+| LLM | OpenAI GPT-4.1 nano (`gpt-4.1-nano`) for agent decisions and player chat | Low cost and low latency |
 | Structured output | JSON schema / tool-use for the `{thought, action, target, say}` response | Reliable action parsing |
 | Shopify | Global Catalog MCP via plain HTTPS (already working) | Real data, no store setup |
 | Art | Free tileset + sprite pack (Kenney, itch.io) | Rules allow public assets; don't draw your own |

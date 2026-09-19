@@ -1,21 +1,15 @@
-"""Thin async OpenAI-compatible chat client (OpenRouter by default) with JSON extraction."""
+"""Thin async OpenAI chat client with JSON extraction."""
 import json, os, re, asyncio, pathlib, httpx
 from dotenv import load_dotenv
 
 load_dotenv(pathlib.Path(__file__).parent / ".env")
 
-API_KEY = os.getenv("LLM_API_KEY", "")
-BASE_URL = os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
-MODEL = os.getenv("LLM_MODEL", "inclusionai/ling-3.0-flash-vl:free")
-# Free models get rate-limited hard, so fall through a chain rather than going silent.
-FALLBACKS = [m.strip() for m in os.getenv(
-    "LLM_FALLBACK_MODELS",
-    "inclusionai/ling-3.0-flash-vl:free,deepseek/deepseek-v4-flash-0731:free",
-).split(",") if m.strip()]
-MODELS = list(dict.fromkeys([MODEL] + FALLBACKS))
+API_KEY = os.getenv("OPENAI_API_KEY", "")
+BASE_URL = "https://api.openai.com/v1"
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-nano")
 
 _client = httpx.AsyncClient(timeout=45)
-# Free tiers share a small upstream pool, so never keep many calls in flight.
+# Bound concurrent agent requests.
 _gate = asyncio.Semaphore(int(os.getenv("LLM_CONCURRENCY", "3")))
 
 
@@ -29,8 +23,6 @@ async def _once(model: str, system: str, user: str, max_tokens: int) -> str:
                          {"role": "user", "content": user}],
             "max_tokens": max_tokens,
             "temperature": 0.9,
-            # several free models are reasoners; their thinking would eat the whole budget
-            "reasoning": {"enabled": False},
         },
     )
     if r.status_code == 429:
@@ -39,32 +31,22 @@ async def _once(model: str, system: str, user: str, max_tokens: int) -> str:
     return (r.json()["choices"][0]["message"].get("content") or "").strip()
 
 
-# The chain is reordered as models prove themselves, so a rate-limited primary
-# is not retried from scratch on every single decision.
-_order = list(MODELS)
-
-
 async def chat(system: str, user: str, max_tokens: int = 400) -> str:
-    """Try the chain, preferring whatever answered last. '' if all fail (callers must cope)."""
+    """Retry once; return '' on failure so callers can fall back to instinct."""
     if not API_KEY:
         return ""
     async with _gate:
-        for model in list(_order):
-            for attempt in range(2):
-                try:
-                    out = await _once(model, system, user, max_tokens)
-                    if out:
-                        if _order[0] != model:      # promote the model that works
-                            _order.remove(model)
-                            _order.insert(0, model)
-                            print(f"[llm] switched to {model}")
-                        return out
-                except Exception as e:
-                    if attempt:
-                        print(f"[llm] {model}: {e}")
-                if attempt == 0:
-                    await asyncio.sleep(1.0)
-    print("[llm] every model failed; agent fell back to instinct")
+        for attempt in range(2):
+            try:
+                out = await _once(MODEL, system, user, max_tokens)
+                if out:
+                    return out
+            except Exception as e:
+                if attempt:
+                    print(f"[llm] {MODEL}: {e}")
+            if attempt == 0:
+                await asyncio.sleep(1.0)
+    print("[llm] request failed; agent fell back to instinct")
     return ""
 
 

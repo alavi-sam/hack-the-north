@@ -61,6 +61,15 @@
            background: rgba(30,23,16,.94); border: 1px solid var(--brass);
            border-radius: 5px; padding: 11px 14px; max-width: 520px; text-align: center; }
   #civic:empty { display: none; }
+  #recap { position: absolute; right: 14px; bottom: 14px; z-index: 5;
+           width: min(360px, calc(100% - 28px)); background: var(--wood-deep);
+           border: 1px solid var(--brass); border-radius: 5px; padding: 10px 12px;
+           box-shadow: 0 6px 24px #0006; }
+  #recap summary { cursor: pointer; color: var(--brass); font-weight: 600; }
+  #recap-content { max-height: min(40vh, 320px); overflow-y: auto; font-size: 12px; }
+  #recap-content p { margin: 10px 0; }
+  #recap-content ul { padding-left: 18px; }
+  #recap-content li { margin: 8px 0; }
   #civic h4 { margin: 0 0 4px; font: 600 15px var(--serif); color: var(--brass); }
   #civic p { margin: 0 0 9px; font-family: var(--serif); font-size: 14px; line-height: 1.45; }
   #civic .row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
@@ -203,6 +212,10 @@
       <div id="bag"></div>
       &nbsp;<kbd>W A S D</kbd> walk &nbsp;<kbd>E</kbd> turn to someone</div>
     <div id="stage"><canvas id="game"></canvas>
+      <details id="recap" hidden>
+        <summary>While you were fast-forwarding</summary>
+        <div id="recap-content" aria-live="polite"></div>
+      </details>
       <div id="civic"></div></div>
     <div id="bottom">
       <div class="field">
@@ -219,6 +232,17 @@
         <button class="btn" data-ev="festival">Festival</button>
         <button class="btn" data-ev="stranger">A stranger</button>
         <button class="btn" data-ev="election">Call an election</button>
+      </div>
+      <div class="stir">
+        <label for="time-speed">Time</label>
+        <select id="time-speed">
+          <option value="1">Normal · 1×</option>
+          <option value="5">Fast · 5×</option>
+          <option value="10">Faster · 10×</option>
+          <option value="20">Fastest · 20×</option>
+        </select>
+        <button class="btn" id="end-speedup" hidden>End fast-forward &amp; recap</button>
+        <span id="speed-status" role="status"></span>
       </div>
     </div>
   </div>
@@ -272,6 +296,7 @@ function connect() {
     const m = JSON.parse(e.data);
     if (m.type === 'state') {
       S = m;
+      renderSpeed();
       try { render(); }
       catch (err) { console.error('render failed', err); }   // one bad frame must not stop the rest
     } else if (m.type === 'open_url' && m.url) window.open(m.url, '_blank');
@@ -283,6 +308,35 @@ function setLink(up) {
   el.textContent = 'Lost the connection to the town. Reconnecting…';
 }
 connect();
+
+let recapId = null;
+document.getElementById('time-speed').onchange = e =>
+  send({ type: 'speed', speed: Number(e.target.value) });
+document.getElementById('end-speedup').onclick = () => send({ type: 'speed', speed: 1 });
+
+function renderSpeed() {
+  const speed = S.speed || 1;
+  document.getElementById('time-speed').value = String(speed);
+  document.getElementById('end-speedup').hidden = speed === 1;
+  document.getElementById('speed-status').textContent = speed > 1 ? `${speed}× · town time` : '';
+  const panel = document.getElementById('recap');
+  const recap = S.speedup_summary;
+  panel.hidden = speed > 1 || !recap;
+  if (!recap || recap.id === recapId) return;
+  recapId = recap.id;
+  const events = recap.events.map(e =>
+    `<li><b>Day ${e.day} · ${esc(e.category)}</b><br>${esc(e.text)}</li>`).join('');
+  const markets = recap.markets.map(m => `<li>${esc(m.name)}: ${m.before === null
+    ? `listed at ${m.after.toFixed(2)} coins`
+    : `${m.before.toFixed(2)} → ${m.after.toFixed(2)} coins (${m.percent > 0 ? '+' : ''}${m.percent}%)`}</li>`).join('');
+  document.getElementById('recap-content').innerHTML =
+    `<p>Day ${recap.from_day} → ${recap.to_day} · ${recap.hours} town hours elapsed</p>` +
+    (events ? `<ul>${events}</ul>` : '<p>No major events occurred during this fast-forward.</p>') +
+    (recap.omitted ? `<p>${recap.omitted} additional events. Showing the first 200.</p>` : '') +
+    (markets ? `<p><b>Stock market · start to finish</b></p><ul>${markets}</ul>` : '') +
+    '<p>Major purchases: 20+ coins. Select a speed to watch another period.</p>';
+  panel.open = true;
+}
 
 /* ---------- who each resident is, in their own terms ---------- */
 const TRADE = {
