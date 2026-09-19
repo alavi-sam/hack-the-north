@@ -462,6 +462,9 @@ function render() {
   document.getElementById('when').textContent = `Day ${S.day} · ${part}`;
   const gov = document.getElementById('gov');
   const P = S.player;
+  const workBtn = document.getElementById('work');
+  workBtn.textContent = P.shift ? `Working… ${P.shift}s` : 'Work a shift';
+  workBtn.disabled = !!P.shift;
   document.getElementById('job').innerHTML = P.employer_name
     ? `Hired by <b style="color:var(--paper)">${esc(P.employer_name)}</b> at ${P.wage} a shift`
       + ` &nbsp;·&nbsp; vigour ${P.energy}`

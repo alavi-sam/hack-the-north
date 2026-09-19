@@ -285,6 +285,7 @@ class World:
         self.shops = [Shop("mira", "Mira's Shop", "shop", goods, holders={"mira": SHARES})]
         # The exchange always stands ready to deal, so there is never a missing counterparty.
         self.exchange = {"cash": 500, "shares": {}}
+        self.shift = None             # the player's shift in progress
         for sh in self.shops:
             sh.share_price = max(1.0, self.fair_value(sh))
             sh.history = [round(sh.share_price, 2)]
@@ -386,27 +387,43 @@ class World:
             if now - p["t"] > 40:
                 self.proposals.remove(p)
 
+    WORKPLACES = ("shop", "farm", "bank", "tavern", "stall_a", "stall_b")
+
     def player_work(self):
         you = self.you
+        if self.shift:
+            left = max(0, round(self.shift["until"] - time.time()))
+            return f"You are already at it — {left}s of the shift left."
         if self.phase == "night":
             return "The town is asleep. There is no work to be had until morning."
         if you.energy < 15:
             return "You are too worn out to work. Rest a while."
+        where = nearest_place(you.x, you.y)
+        cx, cy = place_center(where)
+        if where not in self.WORKPLACES or (cx - you.x) ** 2 + (cy - you.y) ** 2 > 16:
+            return "There is no work out here. Go to the farm, the shop, the bank or a stall."
         you.energy -= 15
-        boss = self.party(you.employer) if you.employer else None
+        self.shift = {"until": time.time() + 7, "boss": you.employer or "", "where": where}
+        return f"You set to work at the {where.replace('_', ' ')}."
+
+    def finish_shift(self):
+        if not self.shift or time.time() < self.shift["until"]:
+            return
+        job, self.shift = self.shift, None
+        you = self.you
+        boss = self.party(job["boss"]) if job["boss"] else None
         if boss:
             paid = self.pay(boss, you, you.wage, "wages")
             if paid:
                 boss.remember(f"The stranger worked a shift for me; I paid {paid}.", 2,
                               source="stranger")
-                self.event(f"You worked a shift; {boss.name} paid you {paid} coins")
-                return f"{boss.name} paid you {paid} coins for the shift."
+                self.event(f"You finished the shift; {boss.name} paid you {paid} coins")
+                return
             self.adjust_trust(you, boss.id, -0.15)
             self.event(f"{boss.name} could not pay your wages")
-            return f"{boss.name} could not pay you."
+            return
         you.cash += 3
-        self.event("You did odd jobs around the square for 3 coins")
-        return "You hauled and swept around the square. 3 coins."
+        self.event("You finished a turn of odd jobs for 3 coins")
 
     def player_trade(self, owner_id, n, buying):
         sh = self.shop_of(owner_id) or self.shop_named(owner_id)
@@ -951,6 +968,7 @@ class World:
     def step(self, dt):
         self.you.energy = min(100, self.you.energy + dt * 1.6)
         self.drift_prices(dt)
+        self.finish_shift()
         self.time_tick()
         self.townsfolk_tick()
         self.expire_proposals()
@@ -1524,6 +1542,15 @@ class World:
             shop.share_price = max(1.0, self.fair_value(shop))
             shop.history = [round(shop.share_price, 2)]
             self.shops.append(shop)
+            # float a founding stake so the business is tradeable from the day it opens,
+            # and so the founder has coin to put stock on the empty shelves
+            opening = SHARES // 4
+            raised = opening * self.quote(shop)
+            if self.exchange["cash"] >= raised:
+                self.exchange["cash"] -= raised
+                ag.cash += raised
+                shop.holders[ag.id] -= opening
+                self.exchange["shares"][ag.id] = opening
             # they work for themselves now
             old_boss = self.party(ag.employer) if ag.employer else None
             ag.employer, ag.wage = "", 0
@@ -1577,6 +1604,8 @@ class World:
             "player": {"x": round(self.you.x, 2), "y": round(self.you.y, 2),
                        "cash": self.you.cash, "inventory": self.you.inventory,
                        "name": self.you.name, "energy": round(self.you.energy),
+                       "shift": (max(0, round(self.shift["until"] - time.time()))
+                                 if self.shift else 0),
                        "employer": self.you.employer, "wage": self.you.wage,
                        "employer_name": (self.party(self.you.employer).name
                                          if self.party(self.you.employer) else "")},
