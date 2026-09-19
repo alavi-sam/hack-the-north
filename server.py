@@ -72,7 +72,10 @@ def build_prompt(ag):
                    f"Townsfolk buy from whoever is CHEAPEST, and you compete with: "
                    f"{', '.join(rivals) if rivals else 'nobody yet'}.\n"
                    'Anyone standing near you is a customer: serve them with `sell_to` and arg '
-                   '"<item>, <quantity>, <price each>". The stranger counts.')
+                   '"<item>, <quantity>, <price each>". The stranger counts.\n'
+                   f"Your shop is cut into 20 shares, {world.quote(shop)} coins each. Short of "
+                   f"coin? `issue_shares` floats some of your own stake and raises it at once — "
+                   f"but you keep less of the profit, and rumour moves the price.")
     elif ag.id == "bram":
         economy = (f"You RUN THE BANK. Reserves: {world.bank_reserves}c. You `lend` at "
                    f"{int(world.interest_rate*100)}% interest and profit only when debts are repaid.")
@@ -126,6 +129,10 @@ use sell_to, buy, lend, repay or hire. Talk alone moves no coins.
 """
 
     economy += ladder
+    if world.market_open():
+        board = "; ".join(f"{m['name']} at {m['price']}" for m in world.market_board()[:3])
+        economy += (f" Shares trade on the exchange: {board}. `buy_shares` into a business you "
+                    f"believe in, `sell_shares` to get out. Talk moves prices.")
     if world.offers:
         pitch = ", ".join(f"{o['name']} at {max(1, round(o['price'] * 0.6))} each"
                           for o in world.offers[:3])
@@ -276,6 +283,9 @@ async def handle(msg):
             ag.remember(f"A stranger told me: {rumour}", 4, source="player")
             ag.speak("...is that so.")
             world.event(f"You whispered to {ag.name}: {rumour}")
+            hit = world.rumour_hits_market(rumour)
+            if hit:
+                world.event(f"Word about {', '.join(hit)} is moving their shares")
             ag.next_tick = time.time() + 0.5   # react soon
 
     elif kind == "buy":
@@ -305,6 +315,10 @@ async def handle(msg):
         except (TypeError, ValueError):
             return
         world.resolve_proposal(pid, bool(msg.get("accept")))
+
+    elif kind == "shares":
+        world.event_result = world.player_trade(
+            str(msg.get("shop", "")), int(msg.get("n", 1) or 1), bool(msg.get("buy")))
 
     elif kind == "source":
         world.event_result = world.player_source(str(msg.get("item", "")))

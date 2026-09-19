@@ -157,6 +157,26 @@ sleeps — sleeping costs no tokens, which also keeps the nights cheap. Kit the 
 exception: he keeps his own hours and works the dark alone. Standing next to a sleeper wakes
 them. The map takes a night wash and lamps come on in the windows.
 
+**The exchange.** Every shop is cut into 20 shares, and a quarter of each is on the market
+from the start, so there is something to trade on day one. A share is valued off the books you
+already have — stock at cost plus a multiple of the day's takings — and the quoted price eases
+toward that, leaning on what the town believes.
+
+- `issue_shares(n)` lets an owner float part of their own stake to raise coin at once. It is a
+  second route to capital beside Bram's loans, at the cost of keeping less of the profit.
+- `buy_shares` / `sell_shares` deal against the exchange, which always stands ready, so there
+  is never a missing counterparty. Trades move the price.
+- Profitable shops pay a dividend on the day's takings, split across the holders.
+
+**This is what finally gives gossip teeth.** Rumours spread well but moved nothing measurable
+— now a rumour naming a shopkeeper drags their shares, weighted by how much the listener
+trusts the teller. Whisper that Mira waters her milk and the ticker drops: her standing reads
+"talked down", and anyone holding her stock is out of pocket. Buying in before you start the
+talk is a strategy the rules permit, and Kit is exactly the sort to work it out.
+
+Elections bite here too: a `cheap_bread` cap squeezes margins and shop values with it, while
+`free_market` lifts them.
+
 **The Shopify hustle.** The Global Catalog is not just the shop's opening stock — it is a
 live supplier anyone can buy from. A background task keeps a pool of real listings topped up
 off the MCP endpoint (in a worker thread, so the search never blocks the simulation).

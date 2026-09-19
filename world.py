@@ -93,12 +93,24 @@ MAX_CONVO_LINES = 8      # a conversation ends after this many lines
 CONVO_COOLDOWN = 50.0    # seconds before the same pair may start talking again
 
 
+SHARES = 20                         # few enough that a share is worth watching
+
+
 @dataclass
 class Shop:
     owner: str
     name: str
     place: str
     goods: list = field(default_factory=list)   # each: name, cost, price, base, qty, real_title, url, image
+    holders: dict = field(default_factory=dict) # who owns the shares
+    share_price: float = 1.0
+    sentiment: float = 0.0                      # what the town believes, moved by rumour
+    takings: int = 0                            # what came over the counter today
+    history: list = field(default_factory=list) # share price, for the chart
+
+    def stock_value(self):
+        """What the goods on the shelves cost to put there."""
+        return sum(g["cost"] * g["qty"] for g in self.goods)
 
     def good(self, name):
         name = (name or "").strip().lower()
@@ -248,6 +260,9 @@ set_price(item, price)         — your own shop only; between cost and 3x cost 
 restock(query)                 — shop owners; buy stock from the outside supplier onto your shelves
 source(query)                  — ANYONE with coin: buy a case of 3 real goods from the supplier
                                  into your own bag, then sell them on at a markup
+issue_shares(n)                — shop owners: float n of your own shares to raise coin now
+buy_shares(shop, n)            — buy into someone's business (arg = "<shop or owner>, <n>")
+sell_shares(shop, n)           — sell shares you hold back to the exchange
 open_stall(name)               — if you have no shop and 55 coins, take a market plot and trade
                                  for yourself instead of for wages
 hire(agent, wage)              — offer someone a job you pay for (arg = wage)
@@ -267,7 +282,16 @@ class World:
             g["cost"] = max(1, round(g["price"] * 0.6))
             g["base"] = g["price"]
             g["qty"] = 6
-        self.shops = [Shop("mira", "Mira's Shop", "shop", goods)]
+        self.shops = [Shop("mira", "Mira's Shop", "shop", goods, holders={"mira": SHARES})]
+        # The exchange always stands ready to deal, so there is never a missing counterparty.
+        self.exchange = {"cash": 500, "shares": {}}
+        for sh in self.shops:
+            sh.share_price = max(1.0, self.fair_value(sh))
+            sh.history = [round(sh.share_price, 2)]
+            # a founding stake is already on the exchange, so there is a market from day one
+            opening = SHARES // 4
+            sh.holders[sh.owner] -= opening
+            self.exchange["shares"][sh.owner] = opening
         # name -> the real catalogue listing, so a product keeps its title, image and
         # link however many hands it passes through
         self.catalogue = {g["name"]: dict(g) for g in goods if g.get("url")}
@@ -384,6 +408,28 @@ class World:
         self.event("You did odd jobs around the square for 3 coins")
         return "You hauled and swept around the square. 3 coins."
 
+    def player_trade(self, owner_id, n, buying):
+        sh = self.shop_of(owner_id) or self.shop_named(owner_id)
+        if sh is None:
+            return "There is no such business."
+        ok, msg = self.trade_shares(self.you, sh, n, buying)
+        return ("You " + msg) if ok else ("You " + msg)
+
+    def rumour_hits_market(self, text, teller_trust=0.5):
+        """A rumour naming a shopkeeper drags their shares. This is what makes a
+        whisper worth something."""
+        low = (text or "").lower()
+        moved = []
+        for sh in self.shops:
+            owner = self.agents.get(sh.owner)
+            if not owner:
+                continue
+            if owner.name.lower() in low or owner.id in low or sh.name.lower() in low:
+                if self.move_sentiment(owner.id, -0.22 * (0.5 + teller_trust),
+                                       f"word going round about {owner.name}"):
+                    moved.append(owner.name)
+        return moved
+
     def player_source(self, name):
         """Buy a case off the real supplier and flip it — the player's own hustle."""
         match = next((o for o in self.offers if o["name"].lower() == (name or "").lower()), None)
@@ -456,6 +502,103 @@ class World:
     def everyone(self):
         return list(self.agents.values()) + [self.you]
 
+    # ---------- the exchange ----------
+    def fair_value(self, sh):
+        """What a share is worth on the books: stock at cost plus a multiple of takings."""
+        return max(1.0, (sh.stock_value() + sh.takings * 4) / SHARES)
+
+    def float_of(self, sh):
+        return self.exchange["shares"].get(sh.owner, 0)
+
+    def quote(self, sh):
+        return max(1, round(sh.share_price))
+
+    def drift_prices(self, dt):
+        """Prices ease toward the books, leaning on what the town believes."""
+        for sh in self.shops:
+            target = self.fair_value(sh) * (1 + sh.sentiment * 0.4)
+            sh.share_price += (target - sh.share_price) * min(1.0, dt * 0.04)
+            sh.share_price = max(1.0, sh.share_price)
+            sh.sentiment *= (1 - min(1.0, dt * 0.02))       # belief fades
+
+    def move_sentiment(self, owner_id, delta, why=""):
+        sh = self.shop_of(owner_id)
+        if not sh:
+            return False
+        before = self.quote(sh)
+        sh.sentiment = max(-1.0, min(1.0, sh.sentiment + delta))
+        sh.share_price = max(1.0, sh.share_price * (1 + delta * 0.6))
+        after = self.quote(sh)
+        if after != before:
+            self.event(f"{sh.name} shares {'rose' if after > before else 'fell'} "
+                       f"{before} → {after}{(' — ' + why) if why else ''}")
+        return True
+
+    def trade_shares(self, who, sh, n, buying):
+        """Deal against the exchange. Returns (ok, message)."""
+        n = max(1, min(SHARES, int(n)))
+        price = self.quote(sh)
+        if buying:
+            avail = self.float_of(sh)
+            if avail <= 0:
+                return False, f"no {sh.name} shares are on offer"
+            n = min(n, avail, who.cash // price)
+            if n <= 0:
+                return False, f"could not afford a share of {sh.name} at {price}"
+            cost = n * price
+            who.cash -= cost
+            self.exchange["cash"] += cost
+            self.exchange["shares"][sh.owner] = avail - n
+            sh.holders[who.id] = sh.holders.get(who.id, 0) + n
+            sh.share_price *= 1 + 0.02 * n
+            self.event(f"{who.name} bought {n} shares in {sh.name} at {price} ({cost} in all)")
+            return True, f"bought {n} shares in {sh.name} at {price} each, {cost} in all"
+
+        held = sh.holders.get(who.id, 0)
+        n = min(n, held)
+        if n <= 0:
+            return False, f"holds no shares in {sh.name}"
+        proceeds = n * price
+        if self.exchange["cash"] < proceeds:
+            return False, "the exchange has no coin to take them"
+        self.exchange["cash"] -= proceeds
+        who.cash += proceeds
+        sh.holders[who.id] = held - n
+        self.exchange["shares"][sh.owner] = self.float_of(sh) + n
+        sh.share_price *= 1 - 0.02 * n
+        sh.share_price = max(1.0, sh.share_price)
+        self.event(f"{who.name} sold {n} shares in {sh.name} at {price} ({proceeds} in all)")
+        return True, f"sold {n} shares in {sh.name} at {price} each, {proceeds} in all"
+
+    def market_open(self):
+        return any(self.float_of(sh) > 0 for sh in self.shops)
+
+    def market_board(self):
+        return [{"name": sh.name, "price": self.quote(sh)} for sh in self.shops
+                if self.float_of(sh) > 0]
+
+    def pay_dividends(self):
+        for sh in self.shops:
+            owner = self.agents.get(sh.owner)
+            if not owner or sh.takings <= 0:
+                continue
+            pot = max(0, round(sh.takings * 0.25))
+            if pot < 1 or owner.cash < pot:
+                sh.takings = 0
+                continue
+            owner.cash -= pot
+            for hid, n in sh.holders.items():
+                if n <= 0:
+                    continue
+                cut = round(pot * n / SHARES)
+                holder = self.party(hid)
+                if holder and cut:
+                    holder.cash += cut
+                    holder.remember(f"{sh.name} paid me {cut} coins in dividend.", 3)
+            self.exchange["cash"] += round(pot * self.float_of(sh) / SHARES)
+            self.event(f"{sh.name} paid {pot} coins of dividend on the day's takings")
+            sh.takings = 0
+
     def may_trade(self, ag):
         """The banker and anyone holding office may not keep a shop. It is a conflict of
         interest, and it keeps the market pitches for the people climbing toward one."""
@@ -467,6 +610,23 @@ class World:
 
     def shop_of(self, owner_id):
         return next((sh for sh in self.shops if sh.owner == owner_id), None)
+
+    def shop_named(self, text):
+        """Find a business by its name, or by whoever keeps it."""
+        text = (text or "").strip().lower()
+        if not text:
+            return None
+        byowner = self.shop_of(text)
+        if byowner:
+            return byowner
+        for sh in self.shops:
+            if text in sh.name.lower() or sh.name.lower() in text:
+                return sh
+        for sh in self.shops:
+            owner = self.agents.get(sh.owner)
+            if owner and owner.name.lower() in text:
+                return sh
+        return None
 
     def shop_at(self, place):
         return next((sh for sh in self.shops if sh.place == place), None)
@@ -636,6 +796,11 @@ class World:
             self.phase = "day"
 
     def on_new_day(self):
+        self.pay_dividends()
+        for sh in self.shops:
+            sh.history.append(round(sh.share_price, 2))
+            if len(sh.history) > 40:
+                sh.history = sh.history[-40:]
         if self.ballot_open:
             self.count_votes()
         self.election_today = False
@@ -765,6 +930,7 @@ class World:
         owner = self.agents.get(shop.owner)
         price = good["price"]
         good["qty"] -= 1
+        shop.takings += price
         if owner:
             owner.cash += price
             if good["qty"] == 0:
@@ -784,6 +950,7 @@ class World:
     # ---------- fast tick: movement only, never waits on the LLM ----------
     def step(self, dt):
         self.you.energy = min(100, self.you.energy + dt * 1.6)
+        self.drift_prices(dt)
         self.time_tick()
         self.townsfolk_tick()
         self.expire_proposals()
@@ -892,6 +1059,9 @@ class World:
             if subject:
                 weight = max(0.0, other.trust.get(ag.id, 0.0))
                 self.adjust_trust(other, subject, -0.25 * (0.4 + weight))
+                # if the subject keeps a shop, the talk drags its shares down
+                self.move_sentiment(subject, -0.18 * (0.5 + weight),
+                                    f"talk about {self.agents[subject].name}")
             ag.speak(claim)
             self.event(f"{ag.name} whispered to {other.name}: {claim}")
             return f"spread a rumour to {other.name}"
@@ -910,6 +1080,7 @@ class World:
             if not self.pay(ag, owner, price, f"bought {good['name']}"):
                 return f"could not afford {good['name']} ({price} coins)"
             good["qty"] -= 1
+            shop.takings += price
             ag.inventory[good["name"]] = ag.inventory.get(good["name"], 0) + 1
             self.event(f"{ag.name} bought {good['name']} from {shop.name} for {price} coins, "
                        f"{good['qty']} left")
@@ -1226,6 +1397,59 @@ class World:
             return (f"bought {units} {match['name']} from the supplier at {unit_cost} coins each "
                     f"({bill} in all), shelved at {shelf_price}")
 
+        if action in ("issue_shares", "float_shares", "raise_capital"):
+            shop = self.shop_of(ag.id)
+            if shop is None:
+                return "keeps no shop, so has nothing to float"
+            try:
+                n = max(1, min(SHARES, int(float(str(arg).split(",")[0].strip()))))
+            except (TypeError, ValueError):
+                n = 6
+            held = shop.holders.get(ag.id, 0)
+            n = min(n, held)
+            if n <= 0:
+                return f"has no shares left in {shop.name} to sell"
+            price = self.quote(shop)
+            raised = n * price
+            if self.exchange["cash"] < raised:
+                return "the exchange has not the coin to take that many"
+            self.exchange["cash"] -= raised
+            ag.cash += raised
+            shop.holders[ag.id] = held - n
+            self.exchange["shares"][ag.id] = self.float_of(shop) + n
+            shop.share_price *= 1 - 0.012 * n              # dilution
+            shop.share_price = max(1.0, shop.share_price)
+            ag.remember(f"I floated {n} shares of {shop.name} and raised {raised} coins.", 4)
+            for other in self.agents.values():
+                if other.id != ag.id:
+                    other.remember(f"{ag.name} put {n} shares of {shop.name} on the market "
+                                   f"at {price}.", 3, source=ag.id)
+            self.event(f"{ag.name} floated {n} shares of {shop.name} at {price}, raising {raised}")
+            return (f"floated {n} shares of {shop.name} at {price} each and raised {raised} coins. "
+                    f"You still hold {shop.holders[ag.id]} of {SHARES}.")
+
+        if action in ("buy_shares", "invest"):
+            shop = self.shop_named(target or arg)
+            if shop is None:
+                return f"could not find a business called '{target or arg}'"
+            try:
+                n = int(float([x for x in str(arg).replace(",", " ").split() if x.isdigit()][0]))
+            except (IndexError, ValueError):
+                n = 3
+            ok, msg = self.trade_shares(ag, shop, n, buying=True)
+            return msg
+
+        if action in ("sell_shares", "divest"):
+            shop = self.shop_named(target or arg)
+            if shop is None:
+                return f"could not find a business called '{target or arg}'"
+            try:
+                n = int(float([x for x in str(arg).replace(",", " ").split() if x.isdigit()][0]))
+            except (IndexError, ValueError):
+                n = 3
+            ok, msg = self.trade_shares(ag, shop, n, buying=False)
+            return msg
+
         if action in ("source", "order", "import"):
             query = (arg or target or "").strip()
             if len(query) < 3:
@@ -1296,7 +1520,9 @@ class World:
             name = (arg or target or f"{ag.name}'s Stall").strip()[:28] or f"{ag.name}'s Stall"
             if ag.name.lower() not in name.lower():
                 name = f"{ag.name}'s {name}"
-            shop = Shop(ag.id, name, plot, [])
+            shop = Shop(ag.id, name, plot, [], holders={ag.id: SHARES})
+            shop.share_price = max(1.0, self.fair_value(shop))
+            shop.history = [round(shop.share_price, 2)]
             self.shops.append(shop)
             # they work for themselves now
             old_boss = self.party(ag.employer) if ag.employer else None
@@ -1370,6 +1596,16 @@ class World:
                         "pitch": POLICIES[c.promise]["pitch"] if c.promise else "has pledged nothing"}
                        for c in self.candidates()] if self.ballot_open else [],
             "election_in": self.election_in(),
+            "market": [{"owner": sh.owner, "name": sh.name,
+                        "color": self.agents[sh.owner].color if sh.owner in self.agents else "#ab977c",
+                        "price": self.quote(sh), "fair": round(self.fair_value(sh), 1),
+                        "sentiment": round(sh.sentiment, 2), "takings": sh.takings,
+                        "float": self.float_of(sh), "history": sh.history[-24:],
+                        "yours": sh.holders.get("stranger", 0),
+                        "holders": {self.party(h).name: n for h, n in sh.holders.items()
+                                    if n > 0 and self.party(h)}}
+                       for sh in self.shops],
+            "exchange": {"cash": self.exchange["cash"]},
             "supplier": [{"name": o["name"], "real_title": o["real_title"], "image": o["image"],
                           "url": o["url"], "case": max(1, round(o["price"] * 0.6)) * 3,
                           "unit": max(1, round(o["price"] * 0.6))} for o in self.offers[:6]],

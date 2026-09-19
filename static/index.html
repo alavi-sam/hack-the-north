@@ -86,7 +86,7 @@
            display: flex; flex-direction: column; }
   #tabs { display: flex; border-bottom: 1px solid var(--wood-line); padding: 0 6px; }
   #tabs button { flex: 1; background: none; border: 0; color: var(--paper-dim);
-                 padding: 13px 2px 11px; cursor: pointer; font-size: 13px;
+                 padding: 13px 1px 11px; cursor: pointer; font-size: 12px;
                  border-bottom: 2px solid transparent; margin-bottom: -1px; }
   #tabs button:hover { color: var(--paper); }
   #tabs button.on { color: var(--brass); border-bottom-color: var(--brass); }
@@ -141,6 +141,20 @@
   .chain { font-family: var(--serif); font-size: 14px; line-height: 1.85;
            background: var(--wood-deep); border-radius: 4px; padding: 12px 14px; }
   .chain em { color: var(--paper-dim); font-style: normal; font-size: 12.5px; font-family: var(--sans); }
+
+  /* ---- market ---- */
+  .stock { border: 1px solid var(--wood-line); border-radius: 6px; padding: 11px 12px;
+           margin-bottom: 10px; }
+  .stock .top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .stock h4 { margin: 0; font: 600 15px var(--serif); }
+  .stock .px { font-family: var(--coin); font-size: 17px; color: var(--brass);
+               font-variant-numeric: tabular-nums; }
+  .stock .sub { color: var(--paper-dim); font-size: 11.5px; margin-top: 3px; }
+  .stock .up { color: var(--moss); } .stock .down { color: var(--rust); }
+  .stock svg { display: block; margin: 8px 0 4px; width: 100%; height: 34px; }
+  .stock .row { display: flex; gap: 6px; align-items: center; margin-top: 7px; }
+  .stock .row .btn { padding: 4px 10px; font-size: 12px; }
+  .stock .mine { margin-left: auto; font-size: 11.5px; color: var(--paper-dim); }
 
   /* ---- shop ---- */
   .good { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; gap: 11px;
@@ -205,12 +219,14 @@
       <button class="on" data-p="people">People</button>
       <button data-p="talk">Talk</button>
       <button data-p="shop">Shop</button>
+      <button data-p="market">Market</button>
       <button data-p="ledger">Ledger</button>
       <button data-p="news">News</button>
     </div>
     <div class="pane on" id="people"></div>
     <div class="pane" id="talk"></div>
     <div class="pane" id="shop"></div>
+    <div class="pane" id="market"></div>
     <div class="pane" id="ledger"></div>
     <div class="pane" id="news"></div>
   </div>
@@ -352,6 +368,10 @@ document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('on', p.id === b.dataset.p));
 });
+document.getElementById('market').addEventListener('click', e => {
+  const b = e.target.closest('[data-sh]');
+  if (b) send({ type: 'shares', shop: b.dataset.sh, n: +b.dataset.n, buy: !!b.dataset.buy });
+});
 document.getElementById('talk').addEventListener('click', e => {
   const b = e.target.closest('[data-with]');
   if (b) { talkWith = b.dataset.with; if (S) drawTalk(); }
@@ -441,7 +461,7 @@ function render() {
     : `No mayor yet — the town votes in ${S.election_in} day${S.election_in === 1 ? '' : 's'}`;
   if (!who.options.length)
     who.innerHTML = S.agents.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
-  drawCivic(); drawOffers(); drawPeople(); drawTalk(); drawShop(); drawLedger(); drawNews();
+  drawCivic(); drawOffers(); drawPeople(); drawMarket(); drawTalk(); drawShop(); drawLedger(); drawNews();
 }
 
 /* Fixed props, so the empty corners read as the edge of a town rather than dead space. */
@@ -732,6 +752,45 @@ function drawTalk() {
   }).join('') : '<p class="quiet">Nothing said here yet.</p>';
 
   document.getElementById('talk').innerHTML = picker + body;
+}
+
+function spark(h, col) {
+  if (!h || h.length < 2) return '';
+  const lo = Math.min(...h), hi = Math.max(...h), span = (hi - lo) || 1;
+  const pts = h.map((v, i) =>
+    `${(i / (h.length - 1) * 100).toFixed(1)},${(30 - (v - lo) / span * 28).toFixed(1)}`).join(' ');
+  return `<svg viewBox="0 0 100 32" preserveAspectRatio="none">
+            <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.6"
+                      vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+function drawMarket() {
+  const ms = S.market || [];
+  document.getElementById('market').innerHTML = ms.length ? ms.map(m => {
+    const h = m.history || [], first = h[0] ?? m.price, move = m.price - first;
+    const mood = m.sentiment > 0.05 ? 'well thought of'
+               : m.sentiment < -0.05 ? 'talked down' : 'steady';
+    return `<div class="stock">
+      <div class="top">
+        <h4 style="color:${m.color}">${esc(m.name)}</h4>
+        <span class="px">${m.price}
+          <span class="${move >= 0 ? 'up' : 'down'}" style="font-size:12px">
+            ${move >= 0 ? '+' : ''}${move.toFixed(0)}</span></span>
+      </div>
+      <div class="sub">worth ${m.fair} on the books · ${esc(mood)} ·
+        ${m.float} of ${20} shares on offer · took ${m.takings} today</div>
+      ${spark(h, m.color)}
+      <div class="row">
+        <button class="btn" data-sh="${m.owner}" data-n="1" data-buy="1">Buy 1</button>
+        <button class="btn" data-sh="${m.owner}" data-n="3" data-buy="1">Buy 3</button>
+        <button class="btn" data-sh="${m.owner}" data-n="1">Sell 1</button>
+        <button class="btn" data-sh="${m.owner}" data-n="3">Sell 3</button>
+        <span class="mine">${m.yours ? `you hold ${m.yours}` : 'you hold none'}</span>
+      </div>
+      <div class="sub">held by ${Object.entries(m.holders).map(([k, v]) =>
+        `${esc(k)} ${v}`).join(', ') || 'nobody'}</div>
+    </div>`;
+  }).join('') : '<p class="quiet">No business has floated shares yet.</p>';
 }
 
 function drawShop() {
