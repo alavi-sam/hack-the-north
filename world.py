@@ -22,6 +22,29 @@ def place_center(name):
     return (x + w / 2, y + h / 2)
 
 
+def parse_offer(arg, target):
+    """Read 'Apples, 50, 2' — or 'Apples, 2' — into (item, quantity, unit price).
+
+    Models write offers loosely, so pull the words out for the item and the numbers
+    out for the figures: two numbers means quantity then unit price, one means price.
+    """
+    parts = [x.strip() for x in str(arg or "").split(",") if x.strip()]
+    words, numbers = [], []
+    for part in parts:
+        try:
+            numbers.append(float(part.replace("c", "").replace("coins", "").strip()))
+        except ValueError:
+            words.append(part)
+    name = words[0] if words else (target or "")
+    if len(numbers) >= 2:
+        qty, unit = int(numbers[0]), numbers[1]
+    elif len(numbers) == 1:
+        qty, unit = 1, numbers[0]
+    else:
+        qty, unit = 1, None
+    return name, max(1, min(99, qty)), unit
+
+
 def nearest_place(x, y):
     return min(PLACES, key=lambda p: (place_center(p)[0] - x) ** 2 + (place_center(p)[1] - y) ** 2)
 
@@ -145,8 +168,8 @@ def make_agents():
 
 ACTIONS = """move_to(place) | talk_to(agent, intent) | work | rest | gossip(agent, about, claim) |
 buy(item)                      — buy one unit from Mira's shop at the retail price
-sell_to(agent, item, price)    — sell one unit you own to another agent (arg = "item, price")
-buy_from(agent, item, price)   — buy one unit off another agent (arg = "item, price")
+sell_to(agent, item, qty, price)  — sell goods you own (arg = "item, quantity, price EACH")
+buy_from(agent, item, qty, price) — buy goods off another agent (arg = "item, quantity, price EACH")
 pay(agent, amount)             — hand over coin: a bribe, hush money, a gift, a deal you struck
 set_price(item, price)         — shopkeeper only; between cost and 3x cost (arg = "item, price")
 restock(query)                 — Mira only; buy new stock from the outside supplier, costs coin
@@ -275,7 +298,7 @@ class World:
         in_stock = [it for it in self.stock if it["qty"] > 0]
         if not in_stock:
             mira.remember("The shelves are bare and customers left empty-handed.", 4)
-            self.event("Townsfolk found the shop EMPTY and went away")
+            self.event("Townsfolk found the shelves bare and went away")
             return
         # cheaper goods sell more often, so Mira's markup is a real trade-off
         weights = [1.0 / max(1, self.prices.get(it["name"], it["price"])) for it in in_stock]
@@ -289,7 +312,7 @@ class World:
             self.flows = self.flows[-40:]
         if item["qty"] == 0:
             mira.remember(f"I have sold out of {item['name']}.", 3)
-        self.event(f"A townsfolk bought {item['name']} for {price}c ({item['qty']} left)")
+        self.event(f"A townsfolk bought {item['name']} for {price} coins, {item['qty']} left")
 
     # ---------- fast tick: movement only, never waits on the LLM ----------
     def step(self, dt):
@@ -328,7 +351,7 @@ class World:
 
             # a producer turns effort into goods, not coin — they earn by selling
             if ag.produces:
-                ag.inventory[ag.produces] = ag.inventory.get(ag.produces, 0) + 2
+                ag.inventory[ag.produces] = ag.inventory.get(ag.produces, 0) + 6
                 return f"worked the farm and now holds {ag.inventory[ag.produces]} {ag.produces}"
 
             # an employee is paid out of their employer's actual purse
@@ -340,7 +363,7 @@ class World:
                 # an employer who cannot make payroll is a relationship event
                 self.adjust_trust(ag, boss.id, -0.15)
                 ag.remember(f"{boss.name} could not pay my wages.", 4, source=boss.id)
-                self.event(f"{boss.name} MISSED PAYROLL — {ag.name} went unpaid")
+                self.event(f"{boss.name} could not make payroll; {ag.name} went unpaid")
                 return f"worked a shift but {boss.name} could not pay"
 
             # nobody employs them: odd jobs around town, barely a living
@@ -400,7 +423,7 @@ class World:
                 weight = max(0.0, other.trust.get(ag.id, 0.0))
                 self.adjust_trust(other, subject, -0.25 * (0.4 + weight))
             ag.speak(claim)
-            self.event(f"RUMOUR — {ag.name} told {other.name}: {claim}")
+            self.event(f"{ag.name} whispered to {other.name}: {claim}")
             return f"spread a rumour to {other.name}"
 
         if action == "buy":
@@ -418,7 +441,7 @@ class World:
                 return f"could not afford {item['name']} ({price} coins)"
             item["qty"] -= 1
             ag.inventory[item["name"]] = ag.inventory.get(item["name"], 0) + 1
-            self.event(f"{ag.name} bought {item['name']} from Mira for {price}c ({item['qty']} left)")
+            self.event(f"{ag.name} bought {item['name']} for {price} coins, {item['qty']} left")
             return f"bought {item['name']} for {price} coins"
 
         if action in ("pay", "give", "bribe"):
@@ -440,18 +463,12 @@ class World:
             other.remember(f"{ag.name} paid me {amount} coins.", 3, source=ag.id)
             ag.remember(f"I paid {other.name} {amount} coins.", 3)
             self.adjust_trust(other, ag.id, 0.12)
-            self.event(f"{ag.name} paid {other.name} {amount}c")
+            self.event(f"{ag.name} handed {other.name} {amount} coins")
             return f"paid {other.name} {amount} coins"
 
         if action in ("buy_from", "sell_to", "sell"):
-            # arg is "item, price"; target is the buyer
-            parts = [x.strip() for x in (arg or "").split(",")]
-            name = parts[0] if parts and parts[0] else target
-            try:
-                price = max(1, int(float(parts[1])))
-            except (IndexError, ValueError):
-                price = max(1, round(self.prices.get(name, 5) * 0.6))
-
+            # arg is "item, qty, price-per-unit" — a deal for 50 apples must move 50 apples
+            name, qty, unit = parse_offer(arg, target)
             if not other:
                 return "named no one to trade with"
             if other.id == ag.id:
@@ -459,33 +476,58 @@ class World:
             seller, buyer = (other, ag) if action == "buy_from" else (ag, other)
 
             have = next((k for k in seller.inventory if k.lower() == (name or "").lower()), None)
-            if not have or seller.inventory[have] <= 0:
-                if seller is ag:
-                    return f"had no {name or 'goods'} to sell"
-                return f"{seller.name} had no {name or 'goods'} to sell"
-            ag, other = seller, buyer   # from here on: ag sells, other buys
-            if not self.pay(other, ag, price, f"bought {have} from {ag.name}"):
-                other.remember(f"I could not afford {ag.name}'s {have} at {price}c.", 2, source=ag.id)
-                return f"{other.name} could not afford {have} at {price} coins"
+            stockpile = seller.inventory.get(have, 0) if have else 0
+            if not have or stockpile <= 0:
+                who = "had no" if seller is ag else f"{seller.name} had no"
+                return f"{who} {name or 'goods'} to sell"
 
-            ag.inventory[have] -= 1
-            # selling to the shopkeeper puts it on the shelves at that wholesale cost
-            if other.id == "mira":
+            if unit is None:
+                unit = max(1, round(self.prices.get(have, 5) * 0.6))
+            unit = max(1, int(unit))
+
+            # fill as much of the order as the seller holds and the buyer can pay for
+            wanted = qty
+            qty = min(qty, stockpile, buyer.cash // unit)
+            if qty <= 0:
+                buyer.remember(f"I could not afford {seller.name}'s {have} at {unit}c each.",
+                               2, source=seller.id)
+                return (f"{buyer.name} could not afford even one {have} at {unit} coins "
+                        f"(they hold {buyer.cash}c)")
+
+            total = qty * unit
+            self.pay(buyer, seller, total, f"{qty}x {have} @ {unit}c")
+            seller.inventory[have] = stockpile - qty
+
+            shortfall = ""
+            if qty < wanted:
+                reason = "that was all they had" if stockpile < wanted else "that was all they could pay for"
+                shortfall = f" — only {qty} of the {wanted} agreed, {reason}"
+                seller.remember(f"I could only fill {qty} of {buyer.name}'s order for {wanted} {have}.", 2)
+
+            # selling to the shopkeeper puts the goods on the shelves at that wholesale cost
+            if buyer.id == "mira":
                 item = self.stock_of(have)
                 if item:
-                    item["qty"] += 1
-                    item["cost"] = price
+                    item["qty"] += qty
+                    item["cost"] = unit
                 else:
+                    retail = max(unit + 1, round(unit * 1.5))
                     self.stock.append({"name": have, "real_title": f"Local {have}", "url": "",
-                                       "image": "", "price": round(price * 1.5), "cost": price, "qty": 1})
-                    self.prices[have] = round(price * 1.5)
-                    self.base_prices[have] = round(price * 1.5)
-                self.event(f"WHOLESALE — {ag.name} supplied Mira 1 {have} at {price}c")
+                                       "image": "", "price": retail, "cost": unit, "qty": qty})
+                    self.prices[have] = retail
+                    self.base_prices[have] = retail
+                self.event(f"{seller.name} supplied the shop with {qty} {have} "
+                           f"at {unit} coins each, {total} in all{shortfall}")
             else:
-                other.inventory[have] = other.inventory.get(have, 0) + 1
-                self.event(f"{ag.name} sold {other.name} 1 {have} for {price}c")
-            self.adjust_trust(other, ag.id, 0.08)
-            return f"sold 1 {have} to {other.name} for {price} coins"
+                buyer.inventory[have] = buyer.inventory.get(have, 0) + qty
+                self.event(f"{seller.name} sold {buyer.name} {qty} {have} "
+                           f"at {unit} coins each, {total} in all{shortfall}")
+            self.adjust_trust(buyer, seller.id, 0.08)
+            self.adjust_trust(seller, buyer.id, 0.08)
+            verb = "bought" if action == "buy_from" else "sold"
+            counterpart = seller.name if action == "buy_from" else buyer.name
+            return (f"{verb} {qty}x {have} {'from' if verb == 'bought' else 'to'} {counterpart} "
+                    f"at {unit} coins each, {total} coins in total{shortfall}")
 
         if action == "set_price":
             if ag.id != "mira":
@@ -506,7 +548,7 @@ class World:
             self.prices[item["name"]] = price
             self.base_prices[item["name"]] = price
             verb = "marked up" if price > old_price else "cut"
-            self.event(f"Mira {verb} {item['name']}: {old_price}c → {price}c (cost {cost}c)")
+            self.event(f"Mira {verb} {item['name']} from {old_price} to {price} coins, having paid {cost}")
             if want != price:
                 return f"{verb} {item['name']} to {price} coins — {want} was outside the allowed range"
             return f"{verb} {item['name']} from {old_price} to {price} coins"
@@ -531,9 +573,9 @@ class World:
             if poached and poached.id != ag.id:
                 poached.remember(f"{ag.name} poached {other.name} off me.", 4, source=ag.id)
                 self.adjust_trust(poached, ag.id, -0.3)
-                self.event(f"{ag.name} POACHED {other.name} from {poached.name} at {wage}c a shift")
+                self.event(f"{ag.name} poached {other.name} away from {poached.name} for {wage} coins a shift")
                 return f"poached {other.name} away from {poached.name} at {wage} coins a shift"
-            self.event(f"{ag.name} hired {other.name} at {wage}c a shift")
+            self.event(f"{ag.name} hired {other.name} for {wage} coins a shift")
             return f"hired {other.name} at {wage} coins a shift"
 
         if action == "lend":
@@ -559,7 +601,7 @@ class World:
             ag.remember(f"I lent {other.name} {amount} coins at {int(self.interest_rate*100)}%.", 3)
             self.flows.append({"t": time.strftime("%H:%M:%S"), "from": "Bank",
                                "to": other.name, "amount": amount, "why": "loan"})
-            self.event(f"LOAN — Bram lent {other.name} {amount}c, {owed}c due back")
+            self.event(f"Bram lent {other.name} {amount} coins, {owed} due back")
             return f"lent {other.name} {amount} coins, {owed} due back at {int(self.interest_rate*100)}% interest"
 
         if action == "repay":
@@ -622,8 +664,8 @@ class World:
                 self.stock.append(item)
                 self.prices[item["name"]] = item["price"]
                 self.base_prices[item["name"]] = item["price"]
-            self.event(f"RESTOCK — Mira bought {units}x {item['name']} at {unit_cost}c "
-                       f"(paid {bill}c) — {item['real_title'][:34]}")
+            self.event(f"Mira took delivery of {units} {item['name']} at {unit_cost} coins "
+                       f"each, {bill} in all: {item['real_title'][:34]}")
             return (f"bought {units} {item['name']} from the supplier at {unit_cost}c each "
                     f"({bill}c total), shelved at {self.prices[item['name']]}c")
 

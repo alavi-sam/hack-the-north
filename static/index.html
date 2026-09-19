@@ -4,342 +4,568 @@
 <meta charset="utf-8">
 <title>Untitled Town</title>
 <style>
-  :root { --bg:#14131a; --panel:#1d1b26; --line:#2f2c3d; --ink:#e8e4f0; --dim:#8f89a3; --accent:#e0a44a; }
+  /* A market town at dusk: old painted wood, lamplight, brass coins.
+     Each resident's own colour is the accent — the same colour as their sprite. */
+  :root {
+    --wood:      #2a211a;   /* panel ground, dark walnut */
+    --wood-deep: #1e1710;   /* recessed wells */
+    --wood-line: #43362a;   /* seams */
+    --paper:     #f2e4ce;   /* lamplit paper */
+    --paper-dim: #ab977c;   /* faded ink */
+    --brass:     #e8a33d;   /* lamplight, coins */
+    --moss:      #8aa86a;
+    --rust:      #c96a52;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --sans: Inter, "Helvetica Neue", system-ui, -apple-system, sans-serif;
+    --coin: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink);
-         font:13px ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
-  #wrap { display:flex; height:100vh; }
-  #left { flex:1; display:flex; flex-direction:column; min-width:0; }
-  canvas#game { background:#20222b; flex:1; width:100%; image-rendering:pixelated; }
-  #bottom { border-top:1px solid var(--line); padding:8px 10px; background:var(--panel);
-            display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  #right { width:360px; border-left:1px solid var(--line); background:var(--panel);
-           display:flex; flex-direction:column; }
-  #tabs { display:flex; border-bottom:1px solid var(--line); }
-  #tabs button { flex:1; background:none; border:none; color:var(--dim); padding:10px 4px;
-                 cursor:pointer; font:inherit; border-bottom:2px solid transparent; }
-  #tabs button.on { color:var(--accent); border-bottom-color:var(--accent); }
-  .pane { display:none; overflow-y:auto; padding:10px; flex:1; }
-  .pane.on { display:block; }
-  .mind { border:1px solid var(--line); border-radius:6px; padding:8px; margin-bottom:8px; }
-  .mind h4 { margin:0 0 4px; font-size:13px; }
-  .mind .th { color:var(--ink); font-style:italic; margin:4px 0; }
-  .mind .meta, .dim { color:var(--dim); font-size:11px; }
-  .logline { padding:3px 0; border-bottom:1px solid #26232f; font-size:11.5px; line-height:1.45; }
-  .logline b { color:var(--accent); }
-  button, input, select { font:inherit; }
-  .btn { background:#2b2838; color:var(--ink); border:1px solid var(--line);
-         border-radius:5px; padding:6px 10px; cursor:pointer; }
-  .btn:hover { border-color:var(--accent); color:var(--accent); }
-  input[type=text] { background:#14131a; color:var(--ink); border:1px solid var(--line);
-                     border-radius:5px; padding:6px 8px; }
-  #chatbox { flex:1; min-width:180px; }
-  .shopitem { display:flex; gap:8px; align-items:center; border:1px solid var(--line);
-              border-radius:6px; padding:6px; margin-bottom:6px; }
-  .shopitem img { width:40px; height:40px; object-fit:cover; border-radius:4px; background:#000; }
-  .shopitem .n { flex:1; min-width:0; }
-  .shopitem .n small { color:var(--dim); display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .thread { border:1px solid var(--line); border-radius:8px; padding:8px; margin-bottom:10px; }
-  .thread.live { border-color:var(--accent); }
-  .thead { display:flex; justify-content:space-between; align-items:center;
-           font-size:11px; color:var(--dim); margin-bottom:6px; }
-  .thead .pair b { font-size:12px; }
-  .tag { font-size:10px; border:1px solid var(--line); border-radius:99px; padding:1px 7px; }
-  .tag.live { color:var(--accent); border-color:var(--accent); }
-  .line { margin:5px 0; line-height:1.45; }
-  .line .sp { font-weight:bold; }
-  .line .tx { color:#cfc9dd; }
-  .sec { font-size:11px; color:var(--dim); text-transform:uppercase;
-         letter-spacing:.08em; margin:12px 0 6px; }
-  .sec:first-child { margin-top:0; }
-  .row { display:flex; justify-content:space-between; gap:8px; padding:4px 0;
-         border-bottom:1px solid #26232f; font-size:11.5px; }
-  .row .r { color:var(--dim); text-align:right; white-space:nowrap; }
-  .chain { border:1px solid var(--line); border-radius:8px; padding:9px; line-height:1.7; font-size:11.5px; }
-  .chain .arrow { color:var(--dim); }
-  .pos { color:#6ed28c; } .neg { color:#e65a5a; }
-  #hud { position:absolute; left:14px; top:12px; background:rgba(20,19,26,.82);
-         border:1px solid var(--line); border-radius:6px; padding:6px 10px; font-size:12px; }
+  body { margin: 0; background: var(--wood-deep); color: var(--paper);
+         font: 14px/1.5 var(--sans); }
+  #wrap { display: flex; height: 100vh; }
+  #left { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+  canvas#game { flex: 1; width: 100%; display: block; }
+
+  /* ---- the bar the player acts from ---- */
+  #bottom { border-top: 1px solid var(--wood-line); background: var(--wood);
+            padding: 10px 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .field { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 240px; }
+  select, input[type=text], button { font: inherit; }
+  select, input[type=text] {
+    background: var(--wood-deep); color: var(--paper);
+    border: 1px solid var(--wood-line); border-radius: 3px; padding: 7px 9px; }
+  input[type=text] { flex: 1; min-width: 0; font-family: var(--serif); font-size: 14px; }
+  input[type=text]::placeholder { color: var(--paper-dim); font-style: italic; }
+  :focus-visible { outline: 2px solid var(--brass); outline-offset: 1px; }
+  .btn { background: transparent; color: var(--paper); border: 1px solid var(--wood-line);
+         border-radius: 3px; padding: 7px 11px; cursor: pointer; }
+  .btn:hover { border-color: var(--brass); color: var(--brass); }
+  .btn.primary { background: var(--brass); border-color: var(--brass); color: #2a1f0c; font-weight: 600; }
+  .btn.primary:hover { background: #f4b45a; color: #2a1f0c; }
+  .btn[disabled] { opacity: .35; cursor: default; }
+  .btn[disabled]:hover { border-color: var(--wood-line); color: var(--paper); }
+  .stir { display: flex; align-items: center; gap: 6px; }
+  .stir span { color: var(--paper-dim); font-size: 12px; }
+
+  #purse { position: absolute; left: 14px; top: 14px; background: rgba(30,23,16,.88);
+           border: 1px solid var(--wood-line); border-radius: 4px; padding: 8px 12px;
+           font-size: 12px; color: var(--paper-dim); backdrop-filter: blur(3px); }
+  #purse b { font-family: var(--coin); font-size: 15px; color: var(--brass); font-variant-numeric: tabular-nums; }
+  #purse kbd { font: inherit; font-family: var(--coin); color: var(--paper);
+               border: 1px solid var(--wood-line); border-radius: 3px; padding: 0 4px; }
+
+  /* ---- the panel of residents ---- */
+  #right { width: 392px; background: var(--wood); border-left: 1px solid var(--wood-line);
+           display: flex; flex-direction: column; }
+  #tabs { display: flex; border-bottom: 1px solid var(--wood-line); padding: 0 6px; }
+  #tabs button { flex: 1; background: none; border: 0; color: var(--paper-dim);
+                 padding: 13px 2px 11px; cursor: pointer; font-size: 13px;
+                 border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  #tabs button:hover { color: var(--paper); }
+  #tabs button.on { color: var(--brass); border-bottom-color: var(--brass); }
+  .pane { display: none; flex: 1; overflow-y: auto; overflow-x: hidden; padding: 14px; }
+  .pane.on { display: block; }
+  .quiet { color: var(--paper-dim); font-family: var(--serif); font-style: italic; }
+
+  /* ---- a resident ---- */
+  .person { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 12px;
+            padding: 14px 0; border-bottom: 1px solid var(--wood-line); }
+  .person:first-child { padding-top: 2px; }
+  .person:last-child { border-bottom: 0; }
+  .face { width: 52px; height: 52px; border-radius: 4px; background: var(--wood-deep); }
+  .who { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .who h3 { margin: 0; font: 600 16px/1.2 var(--serif); }
+  .who .trade { color: var(--paper-dim); font-size: 12px; }
+  .thought { font-family: var(--serif); font-size: 14.5px; font-style: italic;
+             line-height: 1.5; margin: 7px 0 0; color: #e6d7bd; }
+  .doing { margin-top: 6px; font-size: 12px; color: var(--paper-dim); }
+  .vitals { margin-top: 7px; display: flex; gap: 14px; font-size: 12px;
+            align-items: baseline; flex-wrap: wrap; }
+  .vitals .coins { font-family: var(--coin); color: var(--brass); font-variant-numeric: tabular-nums; }
+  .vitals .owing { color: var(--rust); }
+  .speaking .face { box-shadow: 0 0 0 2px var(--brass); }
+
+  /* ---- conversations ---- */
+  .thread { padding: 12px 0; border-bottom: 1px solid var(--wood-line); }
+  .thread:last-child { border-bottom: 0; }
+  .between { font-size: 12px; color: var(--paper-dim); margin-bottom: 9px;
+             display: flex; justify-content: space-between; gap: 10px; }
+  .said { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; margin: 7px 0;
+          font-family: var(--serif); font-size: 14px; line-height: 1.45; }
+  .said .name { font-weight: 600; text-align: right; font-size: 13px; padding-top: 1px; }
+  .still { color: var(--brass); }
+
+  /* ---- ledger ---- */
+  .heading { font-size: 12px; color: var(--paper-dim); margin: 20px 0 8px; }
+  .heading:first-child { margin-top: 0; }
+  .line { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0;
+          border-bottom: 1px solid var(--wood-line); font-size: 13px; }
+  .line:last-child { border-bottom: 0; }
+  .line .amt { font-family: var(--coin); color: var(--brass); white-space: nowrap;
+               font-variant-numeric: tabular-nums; }
+  .line .amt.out { color: var(--rust); }
+  .line .note { color: var(--paper-dim); font-size: 12px; }
+  .chain { font-family: var(--serif); font-size: 14px; line-height: 1.85;
+           background: var(--wood-deep); border-radius: 4px; padding: 12px 14px; }
+  .chain em { color: var(--paper-dim); font-style: normal; font-size: 12.5px; font-family: var(--sans); }
+
+  /* ---- shop ---- */
+  .good { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; gap: 11px;
+          align-items: center; padding: 11px 0; border-bottom: 1px solid var(--wood-line); }
+  .good > div { min-width: 0; }
+  .good .btn { white-space: nowrap; }
+  .good:last-child { border-bottom: 0; }
+  .good img, .good .noimg { width: 46px; height: 46px; border-radius: 3px; object-fit: cover;
+                            background: var(--wood-deep); }
+  .good h4 { margin: 0 0 2px; font: 600 14px var(--serif); }
+  .good .real { display: block; color: var(--paper-dim); font-size: 11.5px;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .good .tag { font-size: 12px; color: var(--paper-dim); }
+  .good .tag b { font-family: var(--coin); color: var(--brass); font-variant-numeric: tabular-nums; }
+  .good .out { color: var(--rust); }
+
+  /* ---- news ---- */
+  .news { font-family: var(--serif); font-size: 13.5px; line-height: 1.5;
+          padding: 7px 0; border-bottom: 1px solid var(--wood-line); display: flex; gap: 10px; }
+  .news:last-child { border-bottom: 0; }
+  .news time { font-family: var(--coin); font-size: 11px; color: var(--paper-dim);
+               flex: none; padding-top: 3px; }
+  .news.loud { color: var(--brass); }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
 <div id="wrap">
-  <div id="left" style="position:relative">
-    <div id="hud">Coins <b id="coins">100</b> · WASD to walk · <b>E</b> to talk</div>
+  <div id="left">
+    <div id="purse">You carry <b id="coins">100</b> coins
+      &nbsp;<kbd>W A S D</kbd> walk &nbsp;<kbd>E</kbd> turn to someone</div>
     <canvas id="game"></canvas>
     <div id="bottom">
-      <select id="who" class="btn"></select>
-      <input id="chatbox" type="text" placeholder="say something… (Enter)">
-      <button class="btn" id="sendbtn">Talk</button>
-      <button class="btn" id="whisperbtn">Whisper rumour</button>
-      <span style="width:12px"></span>
-      <span class="dim">god:</span>
-      <button class="btn" data-ev="crash">crash</button>
-      <button class="btn" data-ev="festival">festival</button>
-      <button class="btn" data-ev="shortage">shortage</button>
-      <button class="btn" data-ev="stranger">stranger</button>
+      <div class="field">
+        <select id="who" aria-label="Who you are speaking to"></select>
+        <input id="line" type="text" placeholder="Say something…">
+        <button class="btn primary" id="say">Say it</button>
+        <button class="btn" id="whisper">Whisper a rumour</button>
+      </div>
+      <div class="stir">
+        <span>Stir things up</span>
+        <button class="btn" data-ev="crash">Market crash</button>
+        <button class="btn" data-ev="shortage">Shortage</button>
+        <button class="btn" data-ev="festival">Festival</button>
+        <button class="btn" data-ev="stranger">A stranger</button>
+      </div>
     </div>
   </div>
+
   <div id="right">
     <div id="tabs">
-      <button class="on" data-p="talk">Talk</button>
-      <button data-p="minds">Minds</button>
-      <button data-p="rel">Relations</button>
-      <button data-p="econ">Economy</button>
+      <button class="on" data-p="people">People</button>
+      <button data-p="talk">Talk</button>
       <button data-p="shop">Shop</button>
-      <button data-p="log">Log</button>
+      <button data-p="ledger">Ledger</button>
+      <button data-p="news">News</button>
     </div>
-    <div class="pane on" id="talk"></div>
-    <div class="pane" id="minds"></div>
-    <div class="pane" id="rel"><canvas id="graph" width="330" height="300"></canvas><div id="reltext"></div></div>
-    <div class="pane" id="econ"></div>
+    <div class="pane on" id="people"></div>
+    <div class="pane" id="talk"></div>
     <div class="pane" id="shop"></div>
-    <div class="pane" id="log"></div>
+    <div class="pane" id="ledger"></div>
+    <div class="pane" id="news"></div>
   </div>
 </div>
+
 <script>
 const cv = document.getElementById('game'), ctx = cv.getContext('2d');
-const gcv = document.getElementById('graph'), gctx = gcv.getContext('2d');
-let S = null, keys = {}, player = {x:17, y:11};
+let S = null, keys = {}, player = { x: 17, y: 11 };
+
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const ws = new WebSocket(`ws://${location.host}/ws`);
+const send = o => ws.readyState === 1 && ws.send(JSON.stringify(o));
 ws.onmessage = e => {
   const m = JSON.parse(e.data);
   if (m.type === 'state') { S = m; render(); }
-  else if (m.type === 'open_url') { if (m.url) window.open(m.url, '_blank'); }
-  else if (m.type === 'reply') { /* shows as a speech bubble + in the log */ }
+  else if (m.type === 'open_url' && m.url) window.open(m.url, '_blank');
 };
-const send = o => ws.readyState === 1 && ws.send(JSON.stringify(o));
 
-// ---- input ----
-addEventListener('keydown', e => {
-  if (document.activeElement === chatbox) {
-    if (e.key === 'Enter') talk();
-    return;
+/* ---------- who each resident is, in their own terms ---------- */
+const TRADE = {
+  mira: 'keeps the shop',  bram: 'runs the bank', wren: 'works for wages',
+  fig:  'grows the food',  kit:  'no honest trade'
+};
+/* A face is the fastest way to stop reading someone as a row of numbers.
+   Pixel rects, so the portraits match the sprites in the town. */
+const FEATURE = {
+  mira: c => `<rect x="4" y="13" width="16" height="3" fill="${c}"/>`,                 // shop collar
+  bram: () => `<rect x="5" y="8" width="5" height="4" fill="none" stroke="#2a211a"/>
+               <rect x="14" y="8" width="5" height="4" fill="none" stroke="#2a211a"/>
+               <rect x="10" y="9" width="4" height="1" fill="#2a211a"/>`,              // spectacles
+  wren: () => `<rect x="3" y="3" width="18" height="4" fill="#c86f6f"/>`,              // headscarf
+  fig:  () => `<rect x="1" y="5" width="22" height="2" fill="#d9bb72"/>
+               <rect x="5" y="2" width="14" height="3" fill="#d9bb72"/>`,              // straw hat
+  kit:  () => `<path d="M2 8 L12 1 L22 8 L22 11 L2 11 Z" fill="#4a3350"/>`             // hood
+};
+function portrait(a) {
+  const skin = '#e3bd95';
+  return `<svg class="face" viewBox="0 0 24 24" shape-rendering="crispEdges" aria-hidden="true">
+    <rect width="24" height="24" fill="${a.color}" opacity=".22"/>
+    <rect x="4" y="15" width="16" height="9" fill="${a.color}"/>
+    <rect x="6" y="4" width="12" height="12" fill="${skin}"/>
+    <rect x="8" y="9" width="2" height="2" fill="#2a211a"/>
+    <rect x="14" y="9" width="2" height="2" fill="#2a211a"/>
+    <rect x="10" y="13" width="4" height="1" fill="#b4835f"/>
+    ${(FEATURE[a.id] || (() => ''))(a.color)}
+  </svg>`;
+}
+const feeling = e => e > 70 ? 'rested' : e > 40 ? 'flagging' : e > 15 ? 'weary' : 'worn out';
+
+/* Trust reads better as a sentence than as a graph of signed decimals. */
+function feelings(a, byId) {
+  const warm = [], cold = [];
+  for (const [id, t] of Object.entries(a.trust || {})) {
+    const o = byId[id]; if (!o) continue;
+    if (t >= 0.35) warm.push(o); else if (t <= -0.25) cold.push(o);
   }
+  const names = xs => xs.map(o => `<b style="color:${o.color}">${esc(o.name)}</b>`).join(' and ');
+  const bits = [];
+  if (warm.length) bits.push(`trusts ${names(warm)}`);
+  if (cold.length) bits.push(`${warm.length ? 'but has no time for' : 'has no time for'} ${names(cold)}`);
+  return bits.length ? bits.join(' ') : 'has made up their mind about nobody yet';
+}
+
+/* ---------- input ---------- */
+const line = document.getElementById('line'), who = document.getElementById('who');
+addEventListener('keydown', e => {
+  if (document.activeElement === line) { if (e.key === 'Enter') speak(); return; }
   keys[e.key.toLowerCase()] = true;
-  if (e.key.toLowerCase() === 'e') { const n = nearestAgent(); if (n) { who.value = n.id; chatbox.focus(); } }
+  if (e.key.toLowerCase() === 'e') { const n = nearest(); if (n) { who.value = n.id; line.focus(); } }
 });
 addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 
-function nearestAgent() {
+function nearest() {
   if (!S) return null;
   let best = null, bd = 9;
-  for (const a of S.agents) { const d = Math.hypot(a.x - player.x, a.y - player.y); if (d < bd) { bd = d; best = a; } }
+  for (const a of S.agents) {
+    const d = Math.hypot(a.x - player.x, a.y - player.y);
+    if (d < bd) { bd = d; best = a; }
+  }
   return best;
 }
 setInterval(() => {
-  let dx = (keys.d || keys.arrowright ? 1 : 0) - (keys.a || keys.arrowleft ? 1 : 0);
-  let dy = (keys.s || keys.arrowdown ? 1 : 0) - (keys.w || keys.arrowup ? 1 : 0);
+  const dx = (keys.d || keys.arrowright ? 1 : 0) - (keys.a || keys.arrowleft ? 1 : 0);
+  const dy = (keys.s || keys.arrowdown ? 1 : 0) - (keys.w || keys.arrowup ? 1 : 0);
   if (dx || dy) {
     player.x = Math.max(.5, Math.min(33.5, player.x + dx * .22));
     player.y = Math.max(.5, Math.min(19.5, player.y + dy * .22));
-    send({type:'move', x:player.x, y:player.y});
+    send({ type: 'move', x: player.x, y: player.y });
   }
 }, 50);
 
-function talk() {
-  const t = chatbox.value.trim(); if (!t) return;
-  send({type:'chat', agent: who.value, text: t}); chatbox.value = '';
+function speak() {
+  const t = line.value.trim(); if (!t) return;
+  send({ type: 'chat', agent: who.value, text: t }); line.value = '';
 }
-sendbtn.onclick = talk;
-whisperbtn.onclick = () => {
-  const t = chatbox.value.trim() || prompt('Rumour to whisper:');
-  if (t) { send({type:'whisper', agent: who.value, text: t}); chatbox.value = ''; }
+document.getElementById('say').onclick = speak;
+document.getElementById('whisper').onclick = () => {
+  const t = line.value.trim();
+  if (!t) { line.placeholder = 'Type the rumour first, then whisper it.'; line.focus(); return; }
+  send({ type: 'whisper', agent: who.value, text: t }); line.value = '';
 };
-document.querySelectorAll('[data-ev]').forEach(b => b.onclick = () => send({type:'event', name: b.dataset.ev}));
+document.querySelectorAll('[data-ev]').forEach(b =>
+  b.onclick = () => send({ type: 'event', name: b.dataset.ev }));
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('on', p.id === b.dataset.p));
 });
+document.getElementById('shop').addEventListener('click', e => {
+  const b = e.target.closest('[data-buy]');
+  if (b) send({ type: 'buy', item: b.dataset.buy });
+});
 
-// ---- render ----
+/* ---------- the town ---------- */
+const ROOF = { shop: '#8c4b32', bank: '#54617e', farm: '#6b7a43', tavern: '#7a4a5e', square: '#7d7455' };
+const SIGN = { shop: 'The Shop', bank: 'The Bank', farm: 'The Farm', tavern: 'The Tavern', square: 'The Square' };
+
 function render() {
   const T = Math.min(cv.clientWidth / S.map.w, cv.clientHeight / S.map.h);
   cv.width = cv.clientWidth; cv.height = cv.clientHeight;
-  ctx.fillStyle = '#2c3a2a'; ctx.fillRect(0, 0, cv.width, cv.height);
 
-  // grass texture
-  ctx.fillStyle = '#334229';
-  for (let i = 0; i < S.map.w; i += 1) for (let j = 0; j < S.map.h; j += 1)
-    if ((i * 7 + j * 3) % 5 === 0) ctx.fillRect(i * T, j * T, T, T);
-
-  // buildings
-  for (const [name, p] of Object.entries(S.map.places)) {
-    const [x, y, w, h, col] = p;
-    ctx.fillStyle = col; ctx.fillRect(x * T, y * T, w * T, h * T);
-    ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(x * T, y * T, w * T, T * .5);
-    ctx.fillStyle = '#efeaf6'; ctx.font = `${Math.max(10, T * .5)}px monospace`; ctx.textAlign = 'center';
-    ctx.fillText(name.toUpperCase(), (x + w / 2) * T, (y + h / 2) * T + 4);
+  ctx.fillStyle = '#6f8a4c'; ctx.fillRect(0, 0, cv.width, cv.height);
+  for (let i = 0; i < S.map.w; i++) for (let j = 0; j < S.map.h; j++) {
+    const n = (i * 31 + j * 17) % 11;
+    if (n < 3) {                                   // meadow patches, soft and irregular
+      ctx.fillStyle = n === 0 ? '#76924f' : '#688045';
+      ctx.fillRect((i + (n % 2) * .3) * T, (j + .2) * T, T * .8, T * .7);
+    }
+    if (n === 7) {                                 // grass tufts
+      ctx.fillStyle = '#5d7a3f';
+      ctx.fillRect((i + .35) * T, (j + .45) * T, T * .12, T * .3);
+      ctx.fillRect((i + .55) * T, (j + .35) * T, T * .12, T * .4);
+    }
   }
 
-  // player
-  drawSprite(player.x, player.y, T, '#ffffff', 'You', '', true);
-  // agents
-  for (const a of S.agents) drawSprite(a.x, a.y, T, a.color, a.name, a.say);
+  // dirt paths from every door to the square
+  const sq = S.map.places.square;
+  const hub = [(sq[0] + sq[2] / 2) * T, (sq[1] + sq[3] / 2) * T];
+  ctx.strokeStyle = '#a8916b'; ctx.lineWidth = T * .5; ctx.lineCap = 'round';
+  for (const [n, p] of Object.entries(S.map.places)) {
+    if (n === 'square') continue;
+    ctx.beginPath(); ctx.moveTo((p[0] + p[2] / 2) * T, (p[1] + p[3]) * T);
+    ctx.lineTo(hub[0], hub[1]); ctx.stroke();
+  }
+
+  scenery(T);
+  for (const [n, p] of Object.entries(S.map.places)) building(n, p, T);
+  const cast = [...S.agents.map(a => ({ x: a.x, y: a.y, color: a.color, name: a.name,
+                                       say: a.say, id: a.id })),
+                { x: player.x, y: player.y, color: '#e8e2d4', name: 'You', say: '', you: true }];
+  cast.sort((p, q) => p.y - q.y);                      // nearer characters drawn in front
+  for (const c of cast) sprite(c, T);
+  const taken = [];
+  for (const c of cast) nameplate(c, T, taken);
+  for (const c of cast) if (c.say) bubble(c.x * T, c.y * T - T * .62 * 1.55, c.say, T);
 
   document.getElementById('coins').textContent = S.player.cash;
-  renderTalk(); renderMinds(); renderGraph(T); renderEcon(); renderShop(); renderLog();
-  if (!who.options.length) {
+  if (!who.options.length)
     who.innerHTML = S.agents.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
-  }
+  drawPeople(); drawTalk(); drawShop(); drawLedger(); drawNews();
 }
 
-function drawSprite(x, y, T, color, name, say, isPlayer) {
-  const px = x * T, py = y * T, r = T * .38;
-  ctx.fillStyle = 'rgba(0,0,0,.3)';
-  ctx.beginPath(); ctx.ellipse(px, py + r, r, r * .35, 0, 0, 7); ctx.fill();
-  ctx.fillStyle = color; ctx.fillRect(px - r, py - r, r * 2, r * 2);
-  ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(px - r * .5, py - r * .4, r * .3, r * .3);
-  ctx.fillRect(px + r * .2, py - r * .4, r * .3, r * .3);
-  if (isPlayer) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(px - r, py - r, r * 2, r * 2); }
-  ctx.fillStyle = '#e8e4f0'; ctx.font = `${Math.max(9, T * .38)}px monospace`; ctx.textAlign = 'center';
-  ctx.fillText(name, px, py + r * 2.2);
-  if (say) bubble(px, py - r * 1.4, say, T);
+/* Fixed props, so the empty corners read as the edge of a town rather than dead space. */
+const TREES = [[1,1],[1.2,8.6],[2.4,10.8],[0.9,17.4],[6.2,19],[12.4,1.2],[13.6,18.4],
+               [20.4,1],[21.6,18.8],[32.6,1.4],[31.4,9],[32.8,16.8],[27,19],[16.8,4.2],[16.6,16]];
+const CRATES = [[11.2,4.4],[11.9,5.1],[22.6,15.2],[12.2,14.6]];
+
+function scenery(T) {
+  for (const [x, y] of TREES) {
+    const px = x * T, py = y * T;
+    ctx.fillStyle = 'rgba(0,0,0,.18)';
+    ctx.beginPath(); ctx.ellipse(px, py + T * .55, T * .5, T * .18, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#6b4c2e'; ctx.fillRect(px - T * .1, py - T * .1, T * .2, T * .65);
+    ctx.fillStyle = '#41662f';
+    ctx.beginPath(); ctx.moveTo(px, py - T * 1.5);
+    ctx.lineTo(px + T * .72, py + T * .05); ctx.lineTo(px - T * .72, py + T * .05);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#4d7538';
+    ctx.beginPath(); ctx.moveTo(px, py - T * 1.15);
+    ctx.lineTo(px + T * .55, py - T * .25); ctx.lineTo(px - T * .55, py - T * .25);
+    ctx.closePath(); ctx.fill();
+  }
+  for (const [x, y] of CRATES) {
+    const px = x * T, py = y * T;
+    ctx.fillStyle = '#9c7746'; ctx.fillRect(px, py, T * .62, T * .62);
+    ctx.fillStyle = '#7d5c33'; ctx.fillRect(px, py + T * .27, T * .62, T * .08);
+    ctx.fillRect(px + T * .27, py, T * .08, T * .62);
+  }
+  // the well in the middle of the square
+  const sq = S.map.places.square, wx = (sq[0] + sq[2] / 2) * T, wy = (sq[1] + sq[3] / 2) * T;
+  ctx.fillStyle = '#8d8d8d';
+  ctx.beginPath(); ctx.ellipse(wx, wy, T * .55, T * .4, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = '#2f3a3f';
+  ctx.beginPath(); ctx.ellipse(wx, wy, T * .34, T * .24, 0, 0, 7); ctx.fill();
+}
+
+function building(name, [x, y, w, h], T) {
+  const px = x * T, py = y * T, pw = w * T, ph = h * T, eaves = ph * .34;
+  if (name === 'square') {                       // open ground, not a building
+    ctx.fillStyle = '#a08f68'; ctx.fillRect(px, py, pw, ph);
+    ctx.fillStyle = '#9a8a64';
+    for (let i = 0; i < w; i++) for (let j = 0; j < h; j++)
+      if ((i * 5 + j * 3) % 4 === 0) ctx.fillRect((x + i) * T, (y + j) * T, T, T);
+  } else {
+    ctx.fillStyle = '#d8c7a6'; ctx.fillRect(px, py + eaves, pw, ph - eaves);        // walls
+    ctx.fillStyle = ROOF[name];                                                     // roof
+    ctx.beginPath(); ctx.moveTo(px - T * .2, py + eaves);
+    ctx.lineTo(px + pw / 2, py); ctx.lineTo(px + pw + T * .2, py + eaves); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#7a5c3a';                                                      // door
+    ctx.fillRect(px + pw / 2 - T * .32, py + ph - T * .95, T * .64, T * .95);
+    ctx.fillStyle = '#8fb4c4';                                                      // windows
+    ctx.fillRect(px + T * .45, py + eaves + T * .35, T * .55, T * .55);
+    ctx.fillRect(px + pw - T * 1, py + eaves + T * .35, T * .55, T * .55);
+  }
+  ctx.fillStyle = '#2a211a';
+  ctx.font = `${Math.max(10, T * .46)}px "Iowan Old Style", Palatino, Georgia, serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText(SIGN[name], px + pw / 2, py + ph + T * .62);
+}
+
+function sprite({ x, y, color, id, you }, T) {
+  const px = x * T, py = y * T, u = T * 0.62;        // u = one "pixel" of the character
+  ctx.fillStyle = 'rgba(0,0,0,.24)';
+  ctx.beginPath(); ctx.ellipse(px, py + u * 1.15, u * .8, u * .26, 0, 0, 7); ctx.fill();
+
+  ctx.fillStyle = color;                              // body
+  ctx.fillRect(px - u * .62, py - u * .1, u * 1.24, u * 1.25);
+  ctx.fillStyle = 'rgba(0,0,0,.16)';                  // legs
+  ctx.fillRect(px - u * .46, py + u * .8, u * .34, u * .35);
+  ctx.fillRect(px + u * .12, py + u * .8, u * .34, u * .35);
+  ctx.fillStyle = color;                              // arms
+  ctx.fillRect(px - u * .84, py + u * .05, u * .22, u * .7);
+  ctx.fillRect(px + u * .62, py + u * .05, u * .22, u * .7);
+
+  ctx.fillStyle = '#e3bd95';                          // head
+  ctx.fillRect(px - u * .52, py - u * 1.2, u * 1.04, u * 1.1);
+  ctx.fillStyle = '#2a211a';                          // eyes
+  ctx.fillRect(px - u * .3, py - u * .82, u * .18, u * .2);
+  ctx.fillRect(px + u * .12, py - u * .82, u * .18, u * .2);
+  ctx.fillStyle = '#b4835f';                          // mouth
+  ctx.fillRect(px - u * .14, py - u * .46, u * .28, u * .08);
+
+  const hat = { wren: '#c86f6f', fig: '#d9bb72', kit: '#4a3350', mira: '#8a5a2c', bram: '#3f4a63' }[id];
+  if (hat) {
+    ctx.fillStyle = hat;
+    ctx.fillRect(px - u * .58, py - u * 1.34, u * 1.16, u * .26);
+    if (id === 'fig') ctx.fillRect(px - u * .88, py - u * 1.12, u * 1.76, u * .12);  // straw brim
+    if (id === 'kit') ctx.fillRect(px - u * .58, py - u * 1.08, u * .14, u * .55);   // hood side
+  }
+  if (id === 'bram') {                                // spectacles
+    ctx.strokeStyle = '#2a211a'; ctx.lineWidth = Math.max(1, u * .07);
+    ctx.strokeRect(px - u * .34, py - u * .86, u * .26, u * .28);
+    ctx.strokeRect(px + u * .08, py - u * .86, u * .26, u * .28);
+  }
+  if (you) {
+    ctx.strokeStyle = '#fff8e8'; ctx.lineWidth = Math.max(1.5, u * .1);
+    ctx.strokeRect(px - u * .62, py - u * 1.24, u * 1.24, u * 2.4);
+  }
+
+}
+
+/* Characters bunch up in the square, so a nameplate steps down until it has clear air. */
+function nameplate({ x, y, name }, T, taken) {
+  const fs = Math.max(11, T * .42), px = x * T;
+  ctx.font = `600 ${fs}px Inter, system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  const w = ctx.measureText(name).width + 10, h = fs * 1.28;
+  let bx = px - w / 2, by = y * T + T * .62 * 1.28;
+  for (let guard = 0; guard < 6; guard++) {
+    const hit = taken.find(r => bx < r.x + r.w && bx + w > r.x && by < r.y + r.h && by + h > r.y);
+    if (!hit) break;
+    by = hit.y + hit.h + 2;
+  }
+  taken.push({ x: bx, y: by, w, h });
+  ctx.fillStyle = 'rgba(30,23,16,.78)';
+  ctx.beginPath(); ctx.roundRect(bx, by, w, h, 3); ctx.fill();
+  ctx.fillStyle = '#f2e4ce';
+  ctx.fillText(name, px, by + fs);
 }
 
 function bubble(px, py, text, T) {
-  ctx.font = `${Math.max(10, T * .36)}px monospace`;
-  const words = text.split(' '), lines = []; let cur = '';
-  for (const w of words) {
-    if ((cur + ' ' + w).length > 26) { lines.push(cur); cur = w; } else cur = cur ? cur + ' ' + w : w;
+  const fs = Math.max(11, T * .38);
+  ctx.font = `${fs}px "Iowan Old Style", Palatino, Georgia, serif`;
+  const lines = []; let cur = '';
+  for (const w of text.split(' ')) {
+    if ((cur + ' ' + w).length > 28) { lines.push(cur); cur = w; }
+    else cur = cur ? cur + ' ' + w : w;
   }
   if (cur) lines.push(cur);
-  const lh = Math.max(12, T * .42), wdt = Math.max(...lines.map(l => ctx.measureText(l).width)) + 14;
-  const hgt = lines.length * lh + 8, bx = px - wdt / 2, by = py - hgt;
-  ctx.fillStyle = 'rgba(248,246,252,.96)';
-  ctx.beginPath(); ctx.roundRect(bx, by, wdt, hgt, 6); ctx.fill();
-  ctx.beginPath(); ctx.moveTo(px - 5, by + hgt); ctx.lineTo(px + 5, by + hgt); ctx.lineTo(px, by + hgt + 7); ctx.fill();
-  ctx.fillStyle = '#17151d'; ctx.textAlign = 'center';
-  lines.forEach((l, i) => ctx.fillText(l, px, by + 16 + i * lh - 4));
+  const lh = fs * 1.35, wd = Math.max(...lines.map(l => ctx.measureText(l).width)) + 16;
+  const ht = lines.length * lh + 10, bx = px - wd / 2, by = py - ht;
+  ctx.fillStyle = '#f7efdd';
+  ctx.beginPath(); ctx.roundRect(bx, by, wd, ht, 5); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(px - 5, by + ht); ctx.lineTo(px + 5, by + ht);
+  ctx.lineTo(px, by + ht + 7); ctx.fill();
+  ctx.fillStyle = '#2a211a'; ctx.textAlign = 'center';
+  lines.forEach((l, i) => ctx.fillText(l, px, by + fs + 4 + i * lh));
 }
 
-function renderTalk() {
-  const cs = (S.conversations || []).slice().reverse();
-  if (!cs.length) { talk.innerHTML = '<div class="dim">Nobody is talking yet…</div>'; return; }
-  talk.innerHTML = cs.map(c => `
-    <div class="thread ${c.closed ? '' : 'live'}">
-      <div class="thead">
-        <span class="pair">
-          <b style="color:${c.colors[0]}">${esc(c.names[0])}</b>
-          <span style="color:var(--dim)"> ↔ </span>
-          <b style="color:${c.colors[1]}">${esc(c.names[1])}</b>
-        </span>
-        <span class="tag ${c.closed ? '' : 'live'}">${c.closed ? 'ended' : 'talking…'} · ${c.lines.length}</span>
+/* ---------- panels ---------- */
+function drawPeople() {
+  const byId = {}; S.agents.forEach(x => byId[x.id] = x);
+  document.getElementById('people').innerHTML = S.agents.map(a => `
+    <article class="person ${a.say ? 'speaking' : ''}">
+      ${portrait(a)}
+      <div>
+        <div class="who">
+          <h3 style="color:${a.color}">${esc(a.name)}</h3>
+          <span class="trade">${TRADE[a.id] || esc(a.role)}</span>
+        </div>
+        <p class="thought">${esc(a.thought)}</p>
+        <div class="doing">${esc(a.action)}</div>
+        <div class="doing">${feelings(a, byId)}</div>
+        <div class="vitals">
+          <span class="coins">${a.cash} coins</span>
+          <span>${feeling(a.energy)}</span>
+          ${a.debt ? `<span class="owing">owes ${a.debt}</span>` : ''}
+          ${a.employer ? `<span>hired by ${esc((S.agents.find(x => x.id === a.employer) || {}).name || a.employer)}</span>` : ''}
+        </div>
       </div>
-      ${c.lines.map(l => {
-        const col = l.speaker === c.a ? c.colors[0] : c.colors[1];
-        return `<div class="line"><span class="sp" style="color:${col}">${esc(l.name)}:</span>
-                <span class="tx">${esc(l.text)}</span></div>`;
-      }).join('')}
-    </div>`).join('');
+    </article>`).join('');
 }
 
-function renderEcon() {
-  const A = {}; S.agents.forEach(a => A[a.id] = a);
-  const c = col => `style="color:${col}"`;
-  const nm = id => A[id] ? `<b ${c(A[id].color)}>${esc(A[id].name)}</b>` : esc(id);
-
-  const jobs = S.agents.filter(a => a.employer).map(a =>
-    `<div class="row"><span>${nm(a.id)} works for ${nm(a.employer)}</span>
-     <span class="r">${a.wage}c / shift</span></div>`).join('') || '<div class="dim">nobody is employed</div>';
-
-  const debts = S.agents.filter(a => a.debt > 0).map(a =>
-    `<div class="row"><span>${nm(a.id)} owes the bank</span>
-     <span class="r neg">${a.debt}c</span></div>`).join('') || '<div class="dim">no outstanding debt</div>';
-
-  const shelves = S.shop.map(i => {
-    const margin = i.price - i.cost;
-    return `<div class="row">
-      <span>${esc(i.name)}</span>
-      <span class="r">${i.qty === 0 ? '<span class="neg">SOLD OUT</span>' : i.qty + ' left'}
-        · ${i.cost}c → ${i.price}c
-        <span class="${margin >= 0 ? 'pos' : 'neg'}">${margin >= 0 ? '+' : ''}${margin}</span></span>
-    </div>`;
-  }).join('');
-
-  const flows = (S.flows || []).slice().reverse().map(f =>
-    `<div class="row"><span>${esc(f.from)} <span class="arrow">→</span> ${esc(f.to)}
-     <span class="dim">${esc(f.why)}</span></span>
-     <span class="r">${f.amount}c</span></div>`).join('') || '<div class="dim">no coin has moved yet</div>';
-
-  econ.innerHTML = `
-    <div class="sec">the chain</div>
-    <div class="chain">
-      Townsfolk <span class="arrow">→ buy from →</span> ${nm('mira')}<br>
-      ${nm('fig')} <span class="arrow">grows goods, sells wholesale →</span> ${nm('mira')}<br>
-      ${nm('mira')} <span class="arrow">pays wages →</span> ${nm('wren')} <span class="arrow">→ spends at the shop</span><br>
-      ${nm('bram')} <span class="arrow">lends at ${Math.round((S.interest_rate || 0) * 100)}%, profits on repayment</span>
-    </div>
-    <div class="sec">purses</div>
-    ${S.agents.map(a => `<div class="row"><span>${nm(a.id)}</span>
-        <span class="r">${a.cash}c${a.debt ? ` · <span class="neg">owes ${a.debt}c</span>` : ''}</span></div>`).join('')}
-    <div class="row"><span><b>Bank reserves</b></span><span class="r">${S.bank_reserves}c</span></div>
-    <div class="sec">employment</div>${jobs}
-    <div class="sec">debt</div>${debts}
-    <div class="sec">shelves · cost → price · margin</div>${shelves}
-    <div class="sec">where the coin went</div>${flows}`;
+function drawTalk() {
+  const cs = (S.conversations || []).slice().reverse();
+  document.getElementById('talk').innerHTML = cs.length ? cs.map(c => `
+    <section class="thread">
+      <div class="between">
+        <span><b style="color:${c.colors[0]}">${esc(c.names[0])}</b> and
+              <b style="color:${c.colors[1]}">${esc(c.names[1])}</b></span>
+        <span class="${c.closed ? '' : 'still'}">${c.closed ? 'done' : 'still talking'}</span>
+      </div>
+      ${c.lines.map(l => `<div class="said">
+          <span class="name" style="color:${l.speaker === c.a ? c.colors[0] : c.colors[1]}">${esc(l.name)}</span>
+          <span>${esc(l.text)}</span></div>`).join('')}
+    </section>`).join('') : '<p class="quiet">The square is quiet. Nobody has struck up a conversation yet.</p>';
 }
 
-function renderMinds() {
-  minds.innerHTML = S.agents.map(a => `
-    <div class="mind" style="border-left:3px solid ${a.color}">
-      <h4 style="color:${a.color}">${esc(a.name)} <span class="meta">— ${esc(a.role)}</span></h4>
-      <div class="meta">goal: ${esc(a.goal)}</div>
-      <div class="th">“${esc(a.thought)}”</div>
-      <div class="meta">last: ${esc(a.action)}</div>
-      <div class="meta">${a.cash}c · energy ${a.energy}${a.debt ? ' · owes ' + a.debt + 'c' : ''}
-        ${Object.entries(a.inventory).filter(([, v]) => v).map(([k, v]) => `· ${esc(k)}×${v}`).join(' ')}</div>
-    </div>`).join('');
-}
-
-function renderGraph(T) {
-  gctx.clearRect(0, 0, gcv.width, gcv.height);
-  const n = S.agents.length, cx = 165, cy = 150, R = 110, pos = {};
-  S.agents.forEach((a, i) => {
-    const th = -Math.PI / 2 + i * 2 * Math.PI / n;
-    pos[a.id] = [cx + R * Math.cos(th), cy + R * Math.sin(th)];
-  });
-  for (const a of S.agents) for (const [bid, t] of Object.entries(a.trust)) {
-    if (!pos[bid]) continue;
-    gctx.strokeStyle = t >= 0 ? `rgba(110,210,140,${.15 + Math.abs(t) * .8})`
-                              : `rgba(230,90,90,${.15 + Math.abs(t) * .8})`;
-    gctx.lineWidth = 1 + Math.abs(t) * 4;
-    gctx.beginPath(); gctx.moveTo(...pos[a.id]); gctx.lineTo(...pos[bid]); gctx.stroke();
-  }
-  for (const a of S.agents) {
-    const [x, y] = pos[a.id];
-    gctx.fillStyle = a.color; gctx.beginPath(); gctx.arc(x, y, 14, 0, 7); gctx.fill();
-    gctx.fillStyle = '#e8e4f0'; gctx.font = '11px monospace'; gctx.textAlign = 'center';
-    gctx.fillText(a.name, x, y + 27);
-  }
-  reltext.innerHTML = '<div class="dim" style="margin-top:8px">green = trust, red = distrust, thickness = strength</div>'
-    + '<div class="dim">bank reserves: ' + S.bank_reserves + 'c</div>';
-}
-
-const esc = s => String(s).replace(/[&<>"']/g, c =>
-  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-
-function renderShop() {
-  shop.innerHTML = S.shop.map(i => `
-    <div class="shopitem">
-      ${i.image ? `<img src="${esc(i.image)}">` : '<div style="width:40px;height:40px;background:#2b2838;border-radius:4px"></div>'}
-      <div class="n"><b>${esc(i.name)}</b> — ${i.price}c
-        <span class="${i.qty ? 'dim' : 'neg'}">${i.qty ? '(' + i.qty + ' left)' : '(sold out)'}</span>
-        <small>${esc(i.real_title || '')}</small></div>
+function drawShop() {
+  document.getElementById('shop').innerHTML = S.shop.map(i => `
+    <div class="good">
+      ${i.image ? `<img src="${esc(i.image)}" alt="">` : '<div class="noimg"></div>'}
+      <div>
+        <h4>${esc(i.name)}</h4>
+        <span class="real">${esc(i.real_title || '')}</span>
+        <span class="tag"><b>${i.price}</b> coins
+          ${i.qty ? `· ${i.qty} on the shelf` : '<span class="out">· none left</span>'}</span>
+      </div>
       <button class="btn" data-buy="${esc(i.name)}" ${i.qty ? '' : 'disabled'}>Buy</button>
     </div>`).join('');
 }
-shop.addEventListener('click', e => {
-  const b = e.target.closest('[data-buy]');
-  if (b) send({type:'buy', item: b.dataset.buy});
-});
 
-function renderLog() {
-  log.innerHTML = S.log.slice().reverse().map(l => {
-    const hot = /^(RUMOUR|MARKET|SHORTAGE|FESTIVAL)/.test(l.text) || l.text.startsWith('You ');
-    return `<div class="logline" ${hot ? 'style="color:var(--accent)"' : ''}>
-              <b>${l.t}</b> ${esc(l.text)}</div>`;
+function drawLedger() {
+  const A = {}; S.agents.forEach(a => A[a.id] = a);
+  const nm = id => A[id] ? `<b style="color:${A[id].color}">${esc(A[id].name)}</b>` : esc(id);
+  const rows = xs => xs.length ? xs.join('') : '<p class="quiet">Nothing yet.</p>';
+
+  document.getElementById('ledger').innerHTML = `
+    <div class="heading">How the money moves</div>
+    <div class="chain">
+      The townsfolk buy from ${nm('mira')}<br>
+      ${nm('fig')} grows food and sells it to her wholesale<br>
+      She pays ${nm('wren')} out of the till, and ${nm('wren')} spends it back in the shop<br>
+      ${nm('bram')} lends at ${Math.round((S.interest_rate || 0) * 100)}%
+        <em>and only profits when a debt comes back</em>
+    </div>
+
+    <div class="heading">Purses</div>
+    ${S.agents.map(a => `<div class="line"><span>${nm(a.id)}</span>
+      <span class="amt">${a.cash}${a.debt ? ` <span class="out">−${a.debt} owed</span>` : ''}</span></div>`).join('')}
+    <div class="line"><span>The bank's reserves</span><span class="amt">${S.bank_reserves}</span></div>
+
+    <div class="heading">Who works for whom</div>
+    ${rows(S.agents.filter(a => a.employer).map(a =>
+      `<div class="line"><span>${nm(a.id)} works for ${nm(a.employer)}</span>
+       <span class="amt">${a.wage} a shift</span></div>`))}
+
+    <div class="heading">On the shelves, and what she makes on them</div>
+    ${S.shop.map(i => `<div class="line">
+       <span>${esc(i.name)} <span class="note">${i.qty ? i.qty + ' left' : 'sold out'}</span></span>
+       <span class="amt">${i.cost} → ${i.price}
+         <span class="${i.price - i.cost >= 0 ? '' : 'out'}">(${i.price - i.cost >= 0 ? '+' : ''}${i.price - i.cost})</span>
+       </span></div>`).join('')}
+
+    <div class="heading">Where the coin went</div>
+    ${rows((S.flows || []).slice().reverse().map(f =>
+      `<div class="line"><span>${esc(f.from)} paid ${esc(f.to)}
+        <span class="note">${esc(f.why)}</span></span>
+       <span class="amt">${f.amount}</span></div>`))}`;
+}
+
+function drawNews() {
+  document.getElementById('news').innerHTML = S.log.slice().reverse().map(l => {
+    const loud = /whispered|market crashed|shortage|festival|poached|could not make payroll|stranger arrived/i
+                   .test(l.text) || l.text.startsWith('You ');
+    return `<div class="news ${loud ? 'loud' : ''}"><time>${l.t}</time><span>${esc(l.text)}</span></div>`;
   }).join('');
 }
 </script>

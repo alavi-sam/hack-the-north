@@ -22,6 +22,8 @@ Reply with ONLY a JSON object, no prose, no markdown fence:
 Valid actions: """ + ACTIONS + """
 Places: shop, bank, farm, tavern, square. Agent ids: mira, bram, wren, fig, kit.
 Pursue your goal. Be specific and a little dramatic. Never invent coins or items you do not have.
+Coins are WHOLE numbers — never 1.75. When you trade, name a QUANTITY and a price PER UNIT,
+and put them in arg as "item, quantity, price" (e.g. "Apples, 50, 2" = fifty apples at 2c each).
 Keep "thought" under 15 words and "say" under 20 words."""
 
 
@@ -37,7 +39,8 @@ def build_prompt(ag):
     # where this agent sits in the town's supply chain
     if ag.produces:
         economy = (f"You PRODUCE {ag.produces}: `work` grows more, and you earn only by "
-                   f"`sell_to(mira, {ag.produces}, price)` at wholesale — or direct to others to undercut her.")
+                   f'`sell_to` with arg "{ag.produces}, <quantity>, <price each>" at wholesale — '
+                   f"or direct to others to undercut her.")
     elif ag.id == "mira":
         economy = ("You RUN THE SHOP. You buy stock wholesale (from Fig, or `restock` from the outside "
                    "supplier) and resell at the price you `set_price`. Wages you owe come out of your own "
@@ -185,7 +188,7 @@ async def handle(msg):
                 item["qty"] -= 1
                 world.agents["mira"].remember(
                     f"The stranger bought {item['name']} for {price}c.", 2, source="player")
-                world.event(f"You bought {item['name']} for {price}c ({item['qty']} left)")
+                world.event(f"You bought {item['name']} for {price} coins, {item['qty']} left")
                 await broadcast({"type": "open_url", "url": item.get("url", ""), "name": item["name"]})
 
     elif kind == "event":
@@ -218,7 +221,7 @@ def god_event(name):
         for ag in world.agents.values():
             ag.remember("The market crashed. Prices collapsed overnight.", 4)
             ag.next_tick = time.time() + random.uniform(0, 2)
-        world.event("MARKET CRASH — prices collapse.")
+        world.event("The market crashed; prices collapsed overnight.")
     elif name == "festival":
         for ag in world.agents.values():
             ag.cash += 15
@@ -226,17 +229,17 @@ def god_event(name):
             ag.remember("A festival came to town. Everyone is in a generous mood.", 3)
             ag.tx, ag.ty = 17, 10
         reprice(1.0)
-        world.event("FESTIVAL — everyone heads to the square, prices settle.")
+        world.event("A festival came to town; everyone drifted to the square and prices settled.")
     elif name == "shortage":
         for ag in world.agents.values():
             ag.remember("Word is there is a shortage coming. Stock will run out.", 4)
             ag.next_tick = time.time() + random.uniform(0, 2)
         reprice(world.price_mult * 1.7)
-        world.event("SHORTAGE — prices spike.")
+        world.event("Word of a shortage spread; prices spiked.")
     elif name == "stranger":
         world.agents["kit"].remember("A wealthy stranger arrived in town. An opportunity.", 4)
         world.agents["kit"].next_tick = time.time() + 0.5
-        world.event("A wealthy STRANGER arrives in town.")
+        world.event("A wealthy stranger arrived in town.")
 
 
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
