@@ -123,6 +123,11 @@ use sell_to, buy, lend, repay or hire. Talk alone moves no coins.
 """
 
     economy += ladder
+    if world.offers:
+        pitch = ", ".join(f"{o['name']} at {max(1, round(o['price'] * 0.6))} each"
+                          for o in world.offers[:3])
+        economy += (f" The outside supplier has real goods in: {pitch}. ANYONE with coin can "
+                    f"`source` a case of 3 and sell them on at a markup — you hold {ag.cash}.")
 
     return f"""You are {ag.name}, the {ag.role}.
 Persona: {ag.persona}
@@ -297,6 +302,9 @@ async def handle(msg):
         except (TypeError, ValueError):
             return
         world.resolve_proposal(pid, bool(msg.get("accept")))
+
+    elif kind == "source":
+        world.event_result = world.player_source(str(msg.get("item", "")))
 
     elif kind == "work":
         world.event_result = world.player_work()

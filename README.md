@@ -157,6 +157,20 @@ sleeps — sleeping costs no tokens, which also keeps the nights cheap. Kit the 
 exception: he keeps his own hours and works the dark alone. Standing next to a sleeper wakes
 them. The map takes a night wash and lamps come on in the windows.
 
+**The Shopify hustle.** The Global Catalog is not just the shop's opening stock — it is a
+live supplier anyone can buy from. A background task keeps a pool of real listings topped up
+off the MCP endpoint (in a worker thread, so the search never blocks the simulation).
+
+- `source(query)` is open to **any** agent with coin, not just shopkeepers: buy a case of 3
+  real products at wholesale into your own bag and sell them on at a markup
+- shipments are scarce — taking one removes it from the pool, so agents race for the same case
+- a shopkeeper pays a **premium for a line they do not carry** and little for more of what is
+  already piled up, so the margin comes from finding what nobody else has
+- `world.catalogue` remembers the real title, image and product URL behind every name, so a
+  product keeps its Shopify identity however many hands it passes through
+- the player has the same hustle: the Shop tab lists the supplier's real goods with images and
+  case prices, and every good on sale in town carries a "view the real product" link
+
 **Earning as the player.** *Work a shift* pays 3 coins for odd jobs, or your wage if someone
 has hired you — agents can offer you a job, which arrives as an offer you accept. Anything in
 your bag can be sold to the nearest shopkeeper at wholesale. Vigour limits how hard you can

@@ -245,7 +245,9 @@ sell_to(agent, item, qty, price)  — sell goods you own (arg = "item, quantity,
 buy_from(agent, item, qty, price) — buy goods off another agent (arg = "item, quantity, price EACH")
 pay(agent, amount)             — hand over coin: a bribe, hush money, a gift, a deal you struck
 set_price(item, price)         — your own shop only; between cost and 3x cost (arg = "item, price")
-restock(query)                 — shop owners; buy new stock from the outside supplier, costs coin
+restock(query)                 — shop owners; buy stock from the outside supplier onto your shelves
+source(query)                  — ANYONE with coin: buy a case of 3 real goods from the supplier
+                                 into your own bag, then sell them on at a markup
 open_stall(name)               — if you have no shop and 55 coins, take a market plot and trade
                                  for yourself instead of for wages
 hire(agent, wage)              — offer someone a job you pay for (arg = wage)
@@ -266,6 +268,9 @@ class World:
             g["base"] = g["price"]
             g["qty"] = 6
         self.shops = [Shop("mira", "Mira's Shop", "shop", goods)]
+        # name -> the real catalogue listing, so a product keeps its title, image and
+        # link however many hands it passes through
+        self.catalogue = {g["name"]: dict(g) for g in goods if g.get("url")}
         self.price_mult = 1.0
         self.log = []
         self.conversations = []
@@ -379,6 +384,24 @@ class World:
         self.event("You did odd jobs around the square for 3 coins")
         return "You hauled and swept around the square. 3 coins."
 
+    def player_source(self, name):
+        """Buy a case off the real supplier and flip it — the player's own hustle."""
+        match = next((o for o in self.offers if o["name"].lower() == (name or "").lower()), None)
+        if match is None:
+            return "That shipment has already gone."
+        unit = max(1, round(match["price"] * 0.6))
+        units, bill = 3, unit * 3
+        if self.you.cash < bill:
+            return f"A case of {match['name']} is {bill} coins and you have {self.you.cash}."
+        self.you.cash -= bill
+        self.offers.remove(match)
+        self.catalogue.setdefault(match["name"], dict(match))
+        self.you.inventory[match["name"]] = self.you.inventory.get(match["name"], 0) + units
+        self.flows.append({"t": time.strftime("%H:%M:%S"), "from": self.you.name,
+                           "to": "Supplier", "amount": bill, "why": f"case of {match['name']}"})
+        self.event(f"You took a case of {units} {match['name']} for {bill} coins")
+        return f"You bought {units} {match['name']} at {unit} each. Sell them on for more."
+
     def player_sell(self, name):
         """Sell something out of your bag to whichever shopkeeper is nearest."""
         you = self.you
@@ -392,22 +415,36 @@ class World:
         keeper, shop = min(keepers, key=lambda ks:
                            (ks[0].x - you.x) ** 2 + (ks[0].y - you.y) ** 2)
         existing = shop.good(have)
-        retail = existing["price"] if existing else max(2, round(self.stock_of(have)["price"]
-                                                                if self.stock_of(have) else 4))
-        price = max(1, round(retail * 0.6))
-        if not self.pay(keeper, you, price, f"bought {have} from the stranger"):
+        listing = self.catalogue.get(have, {})
+        # what the good is actually worth, not a guess of 4
+        retail = existing["price"] if existing else listing.get("price") or 4
+        # a shopkeeper pays a premium for a line they do not carry, and little for
+        # more of what is already piled up — that spread is the whole hustle
+        price = max(1, round(retail * (0.6 if existing else 0.85)))
+
+        want = you.inventory[have]
+        qty = min(want, max(0, keeper.cash // price))
+        if qty <= 0:
             return f"{keeper.name} cannot afford {price} coins for your {have}."
-        you.inventory[have] -= 1
+        total = qty * price
+        self.pay(keeper, you, total, f"bought {qty}x {have} from the stranger")
+        you.inventory[have] -= qty
         if existing:
-            existing["qty"] += 1
+            existing["qty"] += qty
             existing["cost"] = price
         else:
-            shop.goods.append({"name": have, "real_title": f"Local {have}", "url": "", "image": "",
-                               "price": max(price + 1, round(price * 1.5)),
-                               "base": max(price + 1, round(price * 1.5)), "cost": price, "qty": 1})
-        keeper.remember(f"I bought a {have} off the stranger for {price}.", 2, source="stranger")
-        self.event(f"You sold {keeper.name} 1 {have} for {price} coins")
-        return f"{keeper.name} paid you {price} coins for the {have}."
+            shelf_price = max(price + 1, round(price * 1.4))
+            shop.goods.append({"name": have,
+                               "real_title": listing.get("real_title", f"Local {have}"),
+                               "url": listing.get("url", ""), "image": listing.get("image", ""),
+                               "price": shelf_price, "base": shelf_price,
+                               "cost": price, "qty": qty})
+        keeper.remember(f"I bought {qty} {have} off the stranger at {price} each.", 3,
+                        source="stranger")
+        self.event(f"You sold {keeper.name} {qty} {have} at {price} each, {total} in all")
+        left = you.inventory[have]
+        return (f"{keeper.name} paid you {total} coins for {qty} {have}"
+                + (f"; {left} still in your bag." if left else "."))
 
     def party(self, ident):
         """Resolve an action's target to a person — an agent, or the player."""
@@ -964,9 +1001,12 @@ class World:
                     item["cost"] = unit
                 else:
                     retail = max(unit + 1, round(unit * 1.5))
-                    buyers_shop.goods.append({"name": have, "real_title": f"Local {have}", "url": "",
-                                              "image": "", "price": retail, "base": retail,
-                                              "cost": unit, "qty": qty})
+                    listing = self.catalogue.get(have, {})
+                    buyers_shop.goods.append({
+                        "name": have,
+                        "real_title": listing.get("real_title", f"Local {have}"),
+                        "url": listing.get("url", ""), "image": listing.get("image", ""),
+                        "price": retail, "base": retail, "cost": unit, "qty": qty})
                 self.event(f"{seller.name} supplied {buyers_shop.name} with {qty} {have} "
                            f"at {unit} coins each, {total} in all{shortfall}")
             else:
@@ -1148,6 +1188,7 @@ class World:
                     self.wanted.append(query)
                 return f"sent word to the supplier about '{query}' and is waiting on a price"
             self.offers.remove(match)
+            self.catalogue.setdefault(match["name"], dict(match))
             if query not in self.wanted:
                 self.wanted.append(query)
 
@@ -1175,6 +1216,42 @@ class World:
                        f"each, {bill} in all: {match['real_title'][:34]}")
             return (f"bought {units} {match['name']} from the supplier at {unit_cost} coins each "
                     f"({bill} in all), shelved at {shelf_price}")
+
+        if action in ("source", "order", "import"):
+            query = (arg or target or "").strip()
+            if len(query) < 3:
+                return "could not think what to order"
+            match = None
+            for o in self.offers:
+                if query.lower() in o["name"].lower() or o["name"].lower() in query.lower():
+                    match = o; break
+            if match is None and self.offers:
+                match = self.offers[0]
+            if match is None:
+                if query not in self.wanted:
+                    self.wanted.append(query)
+                return f"sent word to the supplier about '{query}'; nothing is in yet"
+
+            unit_cost = max(1, round(match["price"] * 0.6))
+            units = 3
+            bill = unit_cost * units
+            if ag.cash < bill:
+                return (f"the supplier wants {bill} for a case of {match['name']} "
+                        f"({unit_cost} each) and they hold {ag.cash}")
+            ag.cash -= bill
+            self.offers.remove(match)
+            self.catalogue.setdefault(match["name"], dict(match))
+            ag.inventory[match["name"]] = ag.inventory.get(match["name"], 0) + units
+            if query not in self.wanted:
+                self.wanted.append(query)
+            self.flows.append({"t": time.strftime("%H:%M:%S"), "from": ag.name,
+                               "to": "Supplier", "amount": bill,
+                               "why": f"case of {match['name']}"})
+            ag.remember(f"I bought {units} {match['name']} at {unit_cost} each to sell on.", 4)
+            self.event(f"{ag.name} took a case of {units} {match['name']} off the supplier "
+                       f"for {bill} coins — {match['real_title'][:34]}")
+            return (f"bought {units} {match['name']} from the supplier at {unit_cost} each "
+                    f"({bill} in all). Sell them on for more than that.")
 
         if action in ("promise", "campaign", "pledge"):
             if not ag.politician:
@@ -1281,6 +1358,9 @@ class World:
                         "pitch": POLICIES[c.promise]["pitch"] if c.promise else "has pledged nothing"}
                        for c in self.candidates()] if self.ballot_open else [],
             "election_in": self.election_in(),
+            "supplier": [{"name": o["name"], "real_title": o["real_title"], "image": o["image"],
+                          "url": o["url"], "case": max(1, round(o["price"] * 0.6)) * 3,
+                          "unit": max(1, round(o["price"] * 0.6))} for o in self.offers[:6]],
             "flows": self.flows[-14:],
             "price_mult": round(self.price_mult, 2),
             "proposals": [{"id": p["id"], "name": p["name"], "color": p["color"],
