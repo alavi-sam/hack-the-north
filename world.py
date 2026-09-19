@@ -835,9 +835,23 @@ class World:
         self.election_today = True
         self.ballot_open = True
         self.votes = {}
+        taken = {c.promise for c in self.candidates() if c.promise}
         for c in self.candidates():
-            if not c.promise:
-                c.promise = random.choice(list(POLICIES))
+            # two candidates running on the same pledge makes the ballot meaningless,
+            # so anyone who has not staked a position takes one nobody else holds
+            if not c.promise or list(taken).count(c.promise) > 1:
+                spare = [k for k in POLICIES if k not in taken]
+                c.promise = max(spare or list(POLICIES),
+                                key=lambda k: self.stands_to_gain(c, k))
+            taken.add(c.promise)
+        # if they still collide, push the second onto whatever suits them next best
+        seen = set()
+        for c in self.candidates():
+            if c.promise in seen:
+                spare = [k for k in POLICIES if k not in seen]
+                if spare:
+                    c.promise = max(spare, key=lambda k: self.stands_to_gain(c, k))
+            seen.add(c.promise)
         pitch = "; ".join(f"{c.name} would {POLICIES[c.promise]['pitch']}" for c in self.candidates())
         for ag in self.agents.values():
             ag.remember(f"Election day. {pitch}. I must decide who to back.", 5)
@@ -1513,6 +1527,9 @@ class World:
                 key = max(POLICIES, key=lambda k: self.stands_to_gain(ag, k))
             if ag.promise == key:
                 return f"had already pledged to {POLICIES[key]['pitch']}"
+            rival = next((c for c in self.candidates() if c.id != ag.id and c.promise == key), None)
+            if rival:
+                return f"cannot run on the same pledge as {rival.name}; stand for something else"
             ag.promise = key
             pitch = POLICIES[key]["pitch"]
             ag.speak(f"Elect me and I will {pitch}.")
@@ -1625,6 +1642,8 @@ class World:
                         "pitch": POLICIES[c.promise]["pitch"] if c.promise else "has pledged nothing"}
                        for c in self.candidates()] if self.ballot_open else [],
             "election_in": self.election_in(),
+            "your_vote": (self.agents[next(iter(self.votes))].name
+                          if self.votes else ""),
             "market": [{"owner": sh.owner, "name": sh.name,
                         "color": self.agents[sh.owner].color if sh.owner in self.agents else "#ab977c",
                         "price": self.quote(sh), "fair": round(self.fair_value(sh), 1),

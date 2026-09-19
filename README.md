@@ -203,7 +203,8 @@ their own goods, costs and prices, and their goal is rewritten. Buyers — agent
 and the player — go to whichever shop is **cheapest**, so undercutting is a real strategy and
 a markup really costs you custom.
 
-**Politics.** Orla (the sitting alderman, quietly funded by shopkeepers) and Devi (an
+**Politics.** A *Call an election* button on the god panel opens the ballot whenever you want
+one, rather than waiting for the fifth day. Orla (the sitting alderman, quietly funded by shopkeepers) and Devi (an
 agitator for the workers) stand for election every `ELECTION_EVERY` days. They `promise` one
 of four policies and campaign by talking people round. On election day every resident votes
 on **self-interest weighted by trust** — a worker gains from a stipend, an owner from a free

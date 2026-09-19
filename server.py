@@ -396,6 +396,12 @@ def god_event(name):
             ag.next_tick = time.time() + random.uniform(0, 2)
         reprice(world.price_mult * 1.7)
         world.event("Word of a shortage spread; prices spiked.")
+    elif name == "election":
+        if world.ballot_open:
+            world.event("The ballot is already open.")
+        else:
+            world.open_ballot()
+
     elif name == "stranger":
         world.agents["kit"].remember("A wealthy stranger arrived in town. An opportunity.", 4)
         world.agents["kit"].next_tick = time.time() + 0.5

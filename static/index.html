@@ -23,8 +23,14 @@
   body { margin: 0; background: var(--wood-deep); color: var(--paper);
          font: 14px/1.5 var(--sans); }
   #wrap { display: flex; height: 100vh; }
-  #left { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
-  canvas#game { flex: 1; width: 100%; display: block; }
+  /* min-height:0 matters: a flex item will not shrink below its intrinsic size without
+     it, and the canvas sets its own height attribute every frame — so it crept taller
+     each time and pushed the toolbar clean off the bottom of the screen. */
+  #left { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0;
+          position: relative; overflow: hidden; }
+  #stage { flex: 1; min-height: 0; position: relative; display: flex; }
+  canvas#game { flex: 1; width: 100%; min-height: 0; display: block; }
+  #bottom { flex: none; }
 
   /* ---- the bar the player acts from ---- */
   #bottom { border-top: 1px solid var(--wood-line); background: var(--wood);
@@ -51,7 +57,7 @@
           background: var(--rust); color: #fff4ec; padding: 8px 14px; border-radius: 4px;
           font-size: 13px; }
   /* Nothing leaves your purse unless you say yes here. */
-  #civic { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 3;
+  #civic { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 3;
            background: rgba(30,23,16,.94); border: 1px solid var(--brass);
            border-radius: 5px; padding: 11px 14px; max-width: 520px; text-align: center; }
   #civic:empty { display: none; }
@@ -189,13 +195,13 @@
   <div id="left">
     <div id="link" hidden></div>
     <div id="offers"></div>
-    <div id="civic"></div>
     <div id="purse"><span id="when">Day 1</span> &nbsp;·&nbsp; You carry <b id="coins">100</b> coins
       <div id="gov"></div>
       <div id="job"></div>
       <div id="bag"></div>
       &nbsp;<kbd>W A S D</kbd> walk &nbsp;<kbd>E</kbd> turn to someone</div>
-    <canvas id="game"></canvas>
+    <div id="stage"><canvas id="game"></canvas>
+      <div id="civic"></div></div>
     <div id="bottom">
       <div class="field">
         <select id="who" aria-label="Who you are speaking to"></select>
@@ -210,6 +216,7 @@
         <button class="btn" data-ev="shortage">Shortage</button>
         <button class="btn" data-ev="festival">Festival</button>
         <button class="btn" data-ev="stranger">A stranger</button>
+        <button class="btn" data-ev="election">Call an election</button>
       </div>
     </div>
   </div>
@@ -691,8 +698,10 @@ function drawCivic() {
     el.innerHTML = `<h4>Election day</h4>
       <p>${S.ballot.map(c => `<b style="color:${c.color}">${esc(c.name)}</b> would ${esc(c.pitch)}`)
              .join('<br>')}</p>
-      <div class="row">${S.ballot.map(c =>
-        `<button class="btn primary" data-vote="${c.id}">Vote ${esc(c.name)}</button>`).join('')}</div>`;
+      <div class="row">${S.your_vote
+        ? `<span class="quiet">You backed ${esc(S.your_vote)}. The town counts at dawn.</span>`
+        : S.ballot.map(c =>
+            `<button class="btn primary" data-vote="${c.id}">Vote ${esc(c.name)}</button>`).join('')}</div>`;
   } else {
     el.innerHTML = '';
   }
