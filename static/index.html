@@ -72,7 +72,9 @@
   .offer .lapse { font-size: 10.5px; color: var(--paper-dim); margin-left: auto; align-self: center; }
   .offer p b { font-weight: 600; }
   .offer .row { display: flex; gap: 7px; }
-  #purse { position: absolute; left: 14px; top: 14px; background: rgba(30,23,16,.88);
+  /* z-index matters here: the canvas sits in a positioned wrapper later in the DOM,
+     so without it the town paints straight over your details. */
+  #purse { position: absolute; left: 14px; top: 14px; z-index: 4; background: rgba(30,23,16,.88);
            border: 1px solid var(--wood-line); border-radius: 4px; padding: 8px 12px;
            font-size: 12px; color: var(--paper-dim); backdrop-filter: blur(3px); }
   #purse #when { color: var(--paper); }
