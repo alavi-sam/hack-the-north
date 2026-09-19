@@ -456,6 +456,15 @@ class World:
     def everyone(self):
         return list(self.agents.values()) + [self.you]
 
+    def may_trade(self, ag):
+        """The banker and anyone holding office may not keep a shop. It is a conflict of
+        interest, and it keeps the market pitches for the people climbing toward one."""
+        if ag.id == "bram":
+            return False, "the bank may not trade in goods"
+        if ag.politician:
+            return False, "no one standing for office may keep a shop"
+        return True, ""
+
     def shop_of(self, owner_id):
         return next((sh for sh in self.shops if sh.owner == owner_id), None)
 
@@ -1272,6 +1281,9 @@ class World:
             return f"pledged to {pitch}"
 
         if action in ("open_stall", "open_shop", "found_business"):
+            allowed, why = self.may_trade(ag)
+            if not allowed:
+                return f"cannot open a stall — {why}"
             if self.shop_of(ag.id):
                 return "already keeps a shop"
             plot = self.free_plot()

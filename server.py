@@ -43,7 +43,10 @@ def build_prompt(ag):
     debt = ", ".join(f"{k} {v}c" for k, v in ag.debts.items() if v) or "none"
     # Whoever has the coin and no shop should be looking at the empty pitches.
     ladder = ""
-    if not world.shop_of(ag.id):
+    may, why = world.may_trade(ag)
+    if not may:
+        ladder = f" You cannot keep a shop: {why}."
+    elif not world.shop_of(ag.id):
         cost, plot = world.stall_cost(), world.free_plot()
         if not plot:
             ladder = " Every market pitch is taken."
