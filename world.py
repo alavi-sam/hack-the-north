@@ -302,6 +302,8 @@ class World:
         self.speed = 1
         self.speedup = None
         self.speedup_summary = None
+        self.festival_id = 0
+        self.festival_until = 0
         self.summary_seq = 0
         self.conversations = []
         self.convo_seq = 0
@@ -397,7 +399,7 @@ class World:
     def player_work(self):
         you = self.you
         if self.shift:
-            left = max(0, round(self.shift["until"] - clock.time()))
+            left = max(0, math.ceil(self.shift["until"] - clock.time()))
             return f"You are already at it — {left}s of the shift left."
         if self.phase == "night":
             return "The town is asleep. There is no work to be had until morning."
@@ -1646,6 +1648,8 @@ class World:
             "type": "state",
             "speed": self.speed,
             "speedup_summary": self.speedup_summary,
+            "festival": {"id": self.festival_id,
+                         "remaining": max(0, self.festival_until - time.monotonic())},
             "day": self.day,
             "clock": round(self.clock(), 3),
             "phase": self.phase,
@@ -1663,7 +1667,7 @@ class World:
             "player": {"x": round(self.you.x, 2), "y": round(self.you.y, 2),
                        "cash": self.you.cash, "inventory": self.you.inventory,
                        "name": self.you.name, "energy": round(self.you.energy),
-                       "shift": (max(0, round(self.shift["until"] - clock.time()))
+                       "shift": (max(0, math.ceil(self.shift["until"] - clock.time()))
                                  if self.shift else 0),
                        "employer": self.you.employer, "wage": self.you.wage,
                        "employer_name": (self.party(self.you.employer).name

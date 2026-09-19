@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 import catalog
 import llm
 from simulation_clock import clock
-from world import World, ACTIONS, PLACES, nearest_place
+from world import Agent, World, ACTIONS, PLACES, nearest_place
 
 HERE = pathlib.Path(__file__).parent
 app = FastAPI()
@@ -22,7 +22,7 @@ SYSTEM = """You are a resident of a small town in a simulation. Stay in characte
 Reply with ONLY a JSON object, no prose, no markdown fence:
 {"thought": "one short private thought", "action": "<one action>", "target": "<agent id or place or item>", "arg": "<extra, may be empty>", "say": "<one short line spoken aloud, may be empty>"}
 Valid actions: """ + ACTIONS + """
-Places: shop, bank, farm, tavern, square. Agent ids: mira, bram, wren, fig, kit.
+Places: shop, bank, farm, tavern, square. Use the resident ids listed in the prompt.
 Pursue your goal. Be specific and a little dramatic. Never invent coins or items you do not have.
 Coins are WHOLE numbers — never 1.75. When you trade, name a QUANTITY and a price PER UNIT,
 and put them in arg as "item, quantity, price" (e.g. "Apples, 50, 2" = fifty apples at 2c each).
@@ -176,7 +176,7 @@ async def _agent_tick(ag):
         ag.next_tick = clock.time() + SLOW_SECONDS * 1.6
         return
 
-    text = await llm.chat(SYSTEM, build_prompt(ag), max_tokens=300)
+    text = await llm.chat(SYSTEM, f"Resident ids: {', '.join(world.agents)}.\n" + build_prompt(ag), max_tokens=300)
     data = llm.extract_json(text) or world.fallback_decision(ag)
 
     ag.thought = str(data.get("thought") or "...")[:160]
@@ -265,7 +265,9 @@ async def ws_endpoint(ws: WebSocket):
     try:
         while True:
             msg = await ws.receive_json()
-            await handle(msg)
+            result = await handle(msg)
+            if result:
+                await ws.send_json({"type": "action_result", "text": result})
     except WebSocketDisconnect:
         pass
     finally:
@@ -290,7 +292,11 @@ async def handle(msg):
 
     elif kind == "whisper":
         ag = world.agents.get(msg.get("agent", ""))
-        rumour = str(msg.get("text", ""))[:160]
+        rumour = str(msg.get("text", "")).strip()[:160]
+        if not ag:
+            return "Choose a resident to whisper to first."
+        if not rumour:
+            return "Type a rumour in the message box first."
         if ag and rumour:
             ag.remember(f"A stranger told me: {rumour}", 4, source="player")
             ag.speak("...is that so.")
@@ -299,6 +305,7 @@ async def handle(msg):
             if hit:
                 world.event(f"Word about {', '.join(hit)} is moving their shares")
             ag.next_tick = clock.time() + 0.5   # react soon
+            return f"Rumour shared with {ag.name}." + (f" Shares affected: {', '.join(hit)}." if hit else "")
 
     elif kind == "buy":
         item = world.shop_item(msg.get("item", ""))
@@ -336,7 +343,7 @@ async def handle(msg):
         world.event_result = world.player_source(str(msg.get("item", "")))
 
     elif kind == "work":
-        world.event_result = world.player_work()
+        return world.player_work()
 
     elif kind == "sell":
         world.event_result = world.player_sell(str(msg.get("item", "")))
@@ -351,7 +358,7 @@ async def handle(msg):
                 world.event(f"You voted for {world.agents[cid].name}.")
 
     elif kind == "event":
-        god_event(str(msg.get("name", "")))
+        return god_event(str(msg.get("name", "")))
 
 
 async def player_chat(ag, text):
@@ -383,41 +390,72 @@ You have {ag.cash} coins. Stay fully in character. Reply with ONE or TWO short s
 
 def god_event(name):
     def reprice(mult):
-        """Prices always derive from base × a clamped multiplier — never a one-way ratchet."""
+        """Reprice every shop, including goods introduced by agents, and respect the law."""
         world.price_mult = max(0.35, min(2.5, mult))
         for _, g in world.all_goods():
-            g["price"] = max(1, round(g["base"] * world.price_mult))
+            g["price"] = max(1, round(g.get("base", g["price"]) * world.price_mult))
+        world.enforce_policy()
 
     if name == "crash":
         reprice(world.price_mult * 0.6)
+        for shop in world.shops:
+            world.move_sentiment(shop.owner, -0.6, "market crash")
         for ag in world.agents.values():
-            ag.remember("The market crashed. Prices collapsed overnight.", 4)
+            ag.remember("The market crashed. Shop prices and shares fell.", 4)
             ag.next_tick = clock.time() + random.uniform(0, 2)
-        world.event("The market crashed; prices collapsed overnight.", "Town event")
+        result = "Market crash: shop prices and share prices fell (minimum prices and legal caps still apply)."
     elif name == "festival":
-        for ag in world.agents.values():
+        world.festival_id += 1
+        world.festival_until = time.monotonic() + 9
+        for ag in [*world.agents.values(), world.you]:
             ag.cash += 15
             ag.energy = 100
             ag.remember("A festival came to town. Everyone is in a generous mood.", 3)
-            ag.tx, ag.ty = 17, 10
+            if ag is not world.you:
+                ag.tx, ag.ty = 17, 10
+                ag.next_tick = clock.time() + 10
         reprice(1.0)
-        world.event("A festival came to town; everyone drifted to the square and prices settled.", "Town event")
+        result = "Festival: everyone received 15 coins and full energy. Residents are gathering in the square; shop prices reset."
     elif name == "shortage":
+        lost = 0
+        for _, good in world.all_goods():
+            removed = (good["qty"] + 1) // 2
+            good["qty"] -= removed
+            lost += removed
         for ag in world.agents.values():
-            ag.remember("Word is there is a shortage coming. Stock will run out.", 4)
+            ag.remember("A shortage hit. Half the stock is gone and prices rose.", 4)
             ag.next_tick = clock.time() + random.uniform(0, 2)
         reprice(world.price_mult * 1.7)
-        world.event("Word of a shortage spread; prices spiked.", "Town event")
+        result = f"Shortage: {lost} units lost from shop shelves. Shop prices increased where allowed by the law and price limits."
     elif name == "election":
         if world.ballot_open:
-            world.event("The ballot is already open.")
-        else:
-            world.open_ballot()
-
+            return "The ballot is already open. Cast your vote in the town panel."
+        world.open_ballot()
+        return "Election opened. Choose a candidate in the town panel; votes are counted at dawn."
     elif name == "stranger":
-        world.agents["kit"].remember("A wealthy stranger arrived in town. An opportunity.", 4)
+        if "rowan" in world.agents:
+            return "Rowan, the wealthy traveller, is already in town. Select Rowan to talk."
+        visitor = Agent(
+            "rowan", "Rowan", "Traveller",
+            "A wealthy travelling collector. Curious, sociable, and willing to pay for good goods.",
+            "Meet the shopkeepers, buy their goods and invest in a promising local business.",
+            "Hopes to find a rare bargain before anyone realises its worth.",
+            "#e2b85b", "tavern", cash=200, x=32, y=10, tx=17, ty=10,
+            next_tick=clock.time() + 8,
+        )
+        visitor.speak("A new town! Who has something worth buying?", 10)
+        for ag in world.agents.values():
+            ag.trust[visitor.id] = 0.1
+            visitor.trust[ag.id] = 0.1
+            ag.remember("Rowan, a traveller with 200 coins to spend, arrived in town.", 4)
+        world.agents[visitor.id] = visitor
         world.agents["kit"].next_tick = clock.time() + 0.5
-        world.event("A wealthy stranger arrived in town.", "Town event")
+        result = "Rowan arrived at the east edge of town with 200 coins. Select Rowan to talk, or watch them meet the residents."
+    else:
+        return "Unknown town event."
+
+    world.event(result, "Town event")
+    return result
 
 
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")

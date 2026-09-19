@@ -35,7 +35,10 @@
   /* ---- the bar the player acts from ---- */
   #bottom { border-top: 1px solid var(--wood-line); background: var(--wood);
             padding: 10px 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .field { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 240px; }
+  .field { display: flex; align-items: center; gap: 8px; flex: 1 1 100%; min-width: 0; flex-wrap: wrap; }
+  .field input { min-width: 180px; }
+  .field .btn { white-space: nowrap; }
+  #action-status { flex: 1 1 100%; margin: 0; color: var(--brass); font-size: 13px; }
   select, input[type=text], button { font: inherit; }
   select, input[type=text] {
     background: var(--wood-deep); color: var(--paper);
@@ -50,7 +53,7 @@
   .btn.primary:hover { background: #f4b45a; color: #2a1f0c; }
   .btn[disabled] { opacity: .35; cursor: default; }
   .btn[disabled]:hover { border-color: var(--wood-line); color: var(--paper); }
-  .stir { display: flex; align-items: center; gap: 6px; }
+  .stir { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .stir span { color: var(--paper-dim); font-size: 12px; }
 
   #link { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); z-index: 3;
@@ -61,6 +64,18 @@
            background: rgba(30,23,16,.94); border: 1px solid var(--brass);
            border-radius: 5px; padding: 11px 14px; max-width: 520px; text-align: center; }
   #civic:empty { display: none; }
+  #festival-banner { position: absolute; top: 22px; left: 50%; transform: translateX(-50%);
+                     z-index: 4; pointer-events: none; text-align: center;
+                     padding: 10px 24px; border: 1px solid var(--brass); border-radius: 5px;
+                     background: #2a211af2; box-shadow: 0 4px 24px #e8a33d33;
+                     color: var(--paper); animation: festival-welcome .45s ease-out; }
+  #festival-banner strong { display: block; color: var(--brass); font: 600 23px var(--serif); }
+  #festival-banner span { font-size: 12px; }
+  @keyframes festival-welcome {
+    from { opacity: 0; transform: translate(-50%, -12px) scale(.95); }
+    to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) { #festival-banner { animation: none; } }
   #recap { position: absolute; right: 14px; bottom: 14px; z-index: 5;
            width: min(360px, calc(100% - 28px)); background: var(--wood-deep);
            border: 1px solid var(--brass); border-radius: 5px; padding: 10px 12px;
@@ -212,12 +227,17 @@
       <div id="bag"></div>
       &nbsp;<kbd>W A S D</kbd> walk &nbsp;<kbd>E</kbd> turn to someone</div>
     <div id="stage"><canvas id="game"></canvas>
+      <div id="festival-banner" role="status" hidden>
+        <strong>Town Festival!</strong>
+        <span>+15 coins · Full energy · Meet in the square</span>
+      </div>
       <details id="recap" hidden>
         <summary>While you were fast-forwarding</summary>
         <div id="recap-content" aria-live="polite"></div>
       </details>
       <div id="civic"></div></div>
     <div id="bottom">
+      <p id="action-status" role="status" aria-live="polite" hidden></p>
       <div class="field">
         <select id="who" aria-label="Who you are speaking to"></select>
         <input id="line" type="text" placeholder="Say something…">
@@ -282,10 +302,23 @@ const esc = s => String(s).replace(/[&<>"']/g, c =>
 /* The socket is the only thing feeding this page, so a dropped connection used to
    freeze the town with no explanation. Reconnect, and say so while it is down. */
 let ws, retry = 0;
-const send = o => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
+function showAction(text) {
+  const el = document.getElementById('action-status');
+  el.textContent = text;
+  el.hidden = false;
+}
+function send(o) {
+  if (!ws || ws.readyState !== 1) {
+    if (o.type !== 'move') showAction('Not connected to the town. Wait for the connection, then try again.');
+    return false;
+  }
+  ws.send(JSON.stringify(o));
+  if (['work', 'whisper', 'event'].includes(o.type)) showAction('Waiting for the town…');
+  return true;
+}
 
 function connect() {
-  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
   ws.onopen = () => { retry = 0; setLink(true); };
   ws.onclose = () => {
     setLink(false);
@@ -296,11 +329,17 @@ function connect() {
   ws.onmessage = e => {
     const m = JSON.parse(e.data);
     if (m.type === 'state') {
+      if (S?.player.shift && !m.player.shift) {
+        const outcome = [...m.log].reverse().find(e => /finished.*shift|finished a turn of odd jobs|could not pay your wages/.test(e.text));
+        if (outcome) showAction(outcome.text);
+      }
       S = m;
+      syncFestival(m.festival);
       renderSpeed();
       sceneKey = JSON.stringify([S.map, S.plots, (S.shops || []).map(s => [s.place, s.name])]);
       scheduleRender();
-    } else if (m.type === 'open_url' && m.url) window.open(m.url, '_blank');
+    } else if (m.type === 'action_result') showAction(m.text);
+    else if (m.type === 'open_url' && m.url) window.open(m.url, '_blank');
   };
 }
 function setLink(up) {
@@ -420,13 +459,14 @@ setInterval(() => {
 
 function speak() {
   const t = line.value.trim(); if (!t) return;
-  send({ type: 'chat', agent: who.value, text: t }); line.value = '';
+  if (send({ type: 'chat', agent: who.value, text: t })) line.value = '';
 }
 document.getElementById('say').onclick = speak;
 document.getElementById('whisper').onclick = () => {
   const t = line.value.trim();
-  if (!t) { line.placeholder = 'Type the rumour first, then whisper it.'; line.focus(); return; }
-  send({ type: 'whisper', agent: who.value, text: t }); line.value = '';
+  if (!t) { showAction('Type a rumour in the message box, select a resident, then click Whisper a rumour.'); line.focus(); return; }
+  if (!who.value) { showAction('Choose a resident to whisper to first.'); return; }
+  if (send({ type: 'whisper', agent: who.value, text: t })) line.value = '';
 };
 document.getElementById('work').onclick = () => send({ type: 'work' });
 document.getElementById('bag').addEventListener('click', e => {
@@ -485,6 +525,65 @@ const backdrop = document.createElement('canvas');
 let sceneKey = '', backdropKey = '', frame = 0, lastFrame = 0, animating = false;
 const visuals = new Map();
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+let festival = null, festivalSeen = 0, festivalTimer;
+const festivalColors = ['#e8a33d', '#c4553f', '#f2e4ce', '#7fc4c0', '#d0857f'];
+
+function syncFestival(event) {
+  if (!event || event.remaining <= 0 || event.id === festivalSeen) return;
+  festivalSeen = event.id;
+  festival = { started: performance.now() - (9 - event.remaining) * 1000 };
+  const banner = document.getElementById('festival-banner');
+  banner.hidden = false;
+  clearTimeout(festivalTimer);
+  festivalTimer = setTimeout(() => {
+    banner.hidden = true;
+    festival = null;
+    scheduleRender();
+  }, event.remaining * 1000);
+}
+
+function drawFestival(now, T) {
+  if (!festival || reducedMotion.matches) return;
+  const age = (now - festival.started) / 1000;
+  if (age >= 9) return;
+  animating = true;
+  const fade = Math.min(1, age * 3, (9 - age) / 1.5);
+  const square = S.map.places.square;
+  const cx = (square[0] + square[2] / 2) * T;
+  const cy = (square[1] + square[3] / 2) * T;
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, fade);
+  // Two strings of gently swaying bunting frame the gathering place.
+  for (const side of [-1, 1]) {
+    const start = cx + side * T * 7, end = cx + side * T * 1.2;
+    ctx.strokeStyle = '#f2e4ce'; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i <= 12; i++) {
+      const u = i / 12, x = start + (end - start) * u;
+      const y = cy - T * 3 + Math.sin(u * Math.PI) * T * .6;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    for (let i = 1; i < 12; i++) {
+      const u = i / 12, x = start + (end - start) * u;
+      const y = cy - T * 3 + Math.sin(u * Math.PI) * T * .6;
+      ctx.fillStyle = festivalColors[i % festivalColors.length];
+      ctx.beginPath(); ctx.moveTo(x - T * .18, y); ctx.lineTo(x + T * .18, y);
+      ctx.lineTo(x + Math.sin(age * 2 + i) * T * .08, y + T * .45); ctx.fill();
+    }
+  }
+  // Fixed particle count and analytic positions: no growing arrays or per-frame allocations.
+  for (let i = 0; i < 90; i++) {
+    const seed = ((i * 73) % 97) / 97;
+    const x = seed * cv.width + Math.sin(age * 1.8 + i) * T * .6;
+    const y = ((age * (65 + i % 5 * 14) + i * 47) % (cv.height + 60)) - 30;
+    ctx.save(); ctx.translate(x, y); ctx.rotate(age * (i % 2 ? 2 : -2) + i);
+    ctx.fillStyle = festivalColors[i % festivalColors.length];
+    ctx.fillRect(-3, -2, 6, 3 + Math.abs(Math.sin(age * 3 + i)) * 4);
+    ctx.restore();
+  }
+  ctx.restore();
+}
 reducedMotion.addEventListener('change', () => scheduleRender());
 new ResizeObserver(() => scheduleRender()).observe(cv);
 document.addEventListener('visibilitychange', () => {
@@ -561,6 +660,7 @@ function render(now, dt) {
   const speakers = cast.filter(c => c.visual?.text).sort((a, b) => a.id.localeCompare(b.id));
   for (const c of speakers)
     bubble(c.x * T, c.y * T - T * .62 * 1.55, c.visual, T, bubbles, dt);
+  drawFestival(now, T);
 
   // The panels are rebuilt wholesale, which destroys every button in them. At the
   // frame rate that lands mid-click often enough to swallow the click entirely, so
@@ -592,8 +692,13 @@ function render(now, dt) {
   gov.innerHTML = S.mayor_name
     ? `${esc(S.mayor_name)} governs — ${esc(S.policy)}`
     : `No mayor yet — the town votes in ${S.election_in} day${S.election_in === 1 ? '' : 's'}`;
-  if (!who.options.length)
-    who.innerHTML = S.agents.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
+  const roster = S.agents.map(a => a.id).join(',');
+  if (who.dataset.roster !== roster) {
+    const selected = who.value;
+    who.innerHTML = S.agents.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('');
+    if (S.agents.some(a => a.id === selected)) who.value = selected;
+    who.dataset.roster = roster;
+  }
   drawCivic(); drawOffers();
   const drawPane = { people: drawPeople, market: drawMarket, talk: drawTalk,
                      shop: drawShop, ledger: drawLedger, news: drawNews };
