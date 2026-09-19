@@ -4,6 +4,37 @@ A 2D pixel town where every resident is an AI agent with a personality, goals, m
 
 ---
 
+## 0. Running it
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cp .env.example .env     # then put your key in
+.venv/bin/uvicorn server:app --reload --port 8000
+```
+
+Open <http://localhost:8000>. WASD to walk, `E` to select the nearest resident, then type
+in the bottom bar — **Talk** speaks to them, **Whisper rumour** plants one. The right panel
+has Talk / Minds / Relations / Shop / Log; the god buttons force events.
+
+**Talk** is the tab to watch: agent dialogue is threaded per pair, newest first, so you can
+follow one negotiation instead of reading interleaved chatter. A thread runs up to 6 lines
+with strict turn-taking, then closes (each side keeps a summarising memory) and that pair
+goes quiet for 50s. The Log is economy and rumours only.
+
+**Files:** `server.py` (WebSocket + two-tier loop) · `world.py` (state, economy, action
+validation) · `llm.py` (model client) · `catalog.py` (Shopify Global Catalog) ·
+`static/index.html` (whole frontend).
+
+`.env` keys: `LLM_API_KEY`, `LLM_MODEL`, optional `LLM_BASE_URL`, `LLM_FALLBACK_MODELS`,
+`LLM_CONCURRENCY`, `SLOW_SECONDS`.
+
+> **Model note:** free OpenRouter models are rate-limited hard and several are reasoners
+> that return empty completions. `llm.py` disables reasoning tokens and falls through a
+> model chain; if every model fails an agent acts on instinct instead of freezing. For the
+> demo, use a paid model — `inclusionai/ling-3.0-flash-vl:free` was the most reliable free one.
+
+---
+
 ## 1. Overview
 
 **One-liner:** *A tiny society run by AI agents, where the shop is a real Shopify store and you can poke the economy.*
@@ -79,7 +110,37 @@ When A gossips to B about C, B stores it as a memory with a source. B's trust in
 
 ---
 
-## 4. The economy (small, rule-based, not LLM)
+## 4. The economy — a closed supply chain
+
+Every coin in the town is a **transfer between two purses**. Nothing is minted except
+ordinary townsfolk shopping at Mira's (`world.townsfolk_tick`), which is the only money
+entering the system. `World.pay()` is the single chokepoint every transfer goes through,
+so the ledger cannot drift.
+
+```
+Townsfolk ──buy at retail──▶ Mira (merchant)
+                              │  ▲
+        pays wages from her   │  │ buys wholesale (from Fig, or the Shopify supplier)
+        own purse             ▼  │
+                            Wren ──spends wages──▶ the shop
+Fig (supplier) ──grows goods with `work`, sells them──▶ Mira
+Bram (bank) ──lends at 20%──▶ anyone; profits only when the debt is repaid
+Kit ──no job, no goods──▶ must borrow, con, or talk coin out of people
+```
+
+- **Producers** (`Fig`) turn `work` into *goods*, not coin. They only earn by selling.
+- **Employees** (`Wren`) are paid **out of their employer's actual cash**. If Mira is broke,
+  payroll is missed, trust drops, and it lands in the Log. `hire` can poach someone off a
+  rival, which costs the rival a chunk of trust.
+- **The shop has finite stock.** Items carry a `cost` and a `qty`; they sell out. Mira's
+  `set_price` is bounded to between cost and 3× cost, so her "overprice when nobody
+  compares" flaw is a real, visible price change rather than flavour text.
+- **Loans carry interest.** `lend` records principal × 1.2 as the debt; `repay` pays it
+  down and the interest lands in the bank's reserves.
+- **Deals execute.** `sell_to` / `buy_from` / `pay` let a negotiation end in a transaction —
+  a bribe, hush money, or a haggled price. Without these the conversations were theatre.
+
+### 4b. Original notes (rule-based, not LLM)
 
 - **Items:** ~8-10 goods. Shop items come from the Global Catalog (see §5); produce (bread, apples) is local.
 - **Prices:** Merchant sets prices (LLM decision), bounded by rules (can't go below cost or above 3x). Demand pressure nudges suggested price.
