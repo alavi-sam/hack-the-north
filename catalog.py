@@ -12,7 +12,7 @@ SEED_QUERIES = [
     ("wool blanket", "Wool Blanket"),
     ("camping lantern", "Lantern"),
     ("pocket knife", "Pocket Knife"),
-    ("straw hat", "Straw Hat"),
+    ("straw hat", "Straw Hat"), 
 ]
 
 FALLBACK = [
