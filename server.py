@@ -73,6 +73,29 @@ def build_prompt(ag):
                    f"someone out of their coin. With 55 you could `open_stall` and be your own "
                    f"master; you have {ag.cash}.")
 
+    if ag.politician:
+        rivals = ", ".join(f"{c.name} pledges to {__import__('world').POLICIES[c.promise]['pitch']}"
+                           for c in world.candidates() if c.id != ag.id and c.promise) or "nobody yet"
+        mine = ("You have pledged nothing yet — `promise` a policy and campaign on it."
+                if not ag.promise else
+                f"You are running on: {__import__('world').POLICIES[ag.promise]['pitch']}.")
+        economy = (f"You STAND FOR ELECTION. {mine} Against you: {rivals}. "
+                   f"The vote is in {world.election_in()} day(s). Win people over by talking to "
+                   f"them about what they need, and by promising what suits them.")
+
+    when = "night" if world.phase == "night" else "daytime"
+    curfew = ""
+    if world.phase == "night":
+        curfew = (" The shops are shut and the streets are empty — rest, or do the sort of thing"
+                  " that is only done after dark.")
+
+    civics = ""
+    if world.policy:
+        import world as _w
+        civics = f" The law of the town: {_w.POLICIES[world.policy]['law']}"
+    if world.ballot_open:
+        civics += " TODAY IS ELECTION DAY."
+
     partner, transcript, turns = world.convo_transcript(ag)
     convo_block = ""
     if partner:
@@ -93,6 +116,7 @@ Your secret (never state it plainly): {ag.secret}
 
 Coins: {ag.cash}. Energy: {ag.energy}. Carrying: {inv}. You owe: {debt}.
 {economy}
+It is {when} of day {world.day}.{curfew}{civics}
 You are at the {nearest_place(ag.x, ag.y)}.
 Nearby right now: {', '.join(f"{o.name} ({o.id})" for o in near) or 'nobody'}
 Trust you feel: {trust or 'neutral toward everyone'}
@@ -113,6 +137,14 @@ async def agent_tick(ag):
 
 
 async def _agent_tick(ag):
+    # Sleeping costs no tokens and keeps the night quiet.
+    if world.asleep(ag):
+        ag.energy = min(100, ag.energy + 22)
+        ag.thought = "Asleep."
+        ag.last_action = "slept"
+        ag.next_tick = time.time() + SLOW_SECONDS * 1.6
+        return
+
     text = await llm.chat(SYSTEM, build_prompt(ag), max_tokens=300)
     data = llm.extract_json(text) or world.fallback_decision(ag)
 
@@ -251,20 +283,40 @@ async def handle(msg):
             return
         world.resolve_proposal(pid, bool(msg.get("accept")))
 
+    elif kind == "vote":
+        cid = str(msg.get("agent", ""))
+        if world.ballot_open and cid in world.agents and world.agents[cid].politician:
+            if sum(world.votes.values()) == 0:
+                world.votes[cid] = world.votes.get(cid, 0) + 1
+                world.agents[cid].remember("The stranger backed me at the ballot.", 4,
+                                           source="stranger")
+                world.event(f"You voted for {world.agents[cid].name}.")
+
     elif kind == "event":
         god_event(str(msg.get("name", "")))
 
 
 async def player_chat(ag, text):
     ag.remember(f"The stranger said to me: {text}", 2, source="player")
+    world.say_into(world.you, ag, text)          # your half of the thread
     system = f"""You are {ag.name}, the {ag.role} in a small town. {ag.persona}
 Your goal: {ag.goal}. Your secret (never admit it plainly): {ag.secret}
 You have {ag.cash} coins. Stay fully in character. Reply with ONE or TWO short spoken sentences, nothing else."""
     mems = "\n".join(f"- {m.text}" for m in ag.top_memories(5))
-    reply = await llm.chat(system, f"What you remember:\n{mems}\n\nA stranger says to you: \"{text}\"\nYour reply:", max_tokens=120)
+    thread = world.thread(ag.id, "stranger", create=False)
+    history = ""
+    if thread and len(thread.lines) > 1:
+        past = thread.lines[-9:-1]
+        history = "\n".join(f"{l['name']}: {l['text']}" for l in past)
+        history = f"\nWhat the two of you have said so far:\n{history}\n"
+    reply = await llm.chat(
+        system,
+        f"What you remember:\n{mems}\n{history}\nThe stranger says: \"{text}\"\nYour reply:",
+        max_tokens=120)
     reply = (reply or "...").strip().strip('"')[:200]
     ag.speak(reply, 9)
     ag.remember(f"I told the stranger: {reply}", 1)
+    world.say_into(ag, world.you, reply)         # and theirs, kept for good
     # so that "I'll take the boots" can actually become a sale
     ag.next_tick = min(ag.next_tick, time.time() + 1.5)
     world.event(f"{ag.name} said to you: {reply}")

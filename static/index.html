@@ -51,16 +51,26 @@
           background: var(--rust); color: #fff4ec; padding: 8px 14px; border-radius: 4px;
           font-size: 13px; }
   /* Nothing leaves your purse unless you say yes here. */
+  #civic { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 3;
+           background: rgba(30,23,16,.94); border: 1px solid var(--brass);
+           border-radius: 5px; padding: 11px 14px; max-width: 520px; text-align: center; }
+  #civic:empty { display: none; }
+  #civic h4 { margin: 0 0 4px; font: 600 15px var(--serif); color: var(--brass); }
+  #civic p { margin: 0 0 9px; font-family: var(--serif); font-size: 14px; line-height: 1.45; }
+  #civic .row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
   #offers { position: absolute; right: 14px; top: 14px; z-index: 3;
-            display: flex; flex-direction: column; gap: 8px; max-width: 330px; }
+            display: flex; flex-direction: column; gap: 7px; width: 270px; }
   .offer { background: rgba(30,23,16,.94); border: 1px solid var(--brass);
            border-radius: 5px; padding: 10px 12px; }
-  .offer p { margin: 0 0 9px; font-family: var(--serif); font-size: 14px; line-height: 1.45; }
+  .offer p { margin: 0 0 8px; font-family: var(--serif); font-size: 13px; line-height: 1.4; }
+  .offer .lapse { font-size: 10.5px; color: var(--paper-dim); margin-left: auto; align-self: center; }
   .offer p b { font-weight: 600; }
   .offer .row { display: flex; gap: 7px; }
   #purse { position: absolute; left: 14px; top: 14px; background: rgba(30,23,16,.88);
            border: 1px solid var(--wood-line); border-radius: 4px; padding: 8px 12px;
            font-size: 12px; color: var(--paper-dim); backdrop-filter: blur(3px); }
+  #purse #when { color: var(--paper); }
+  #purse #gov { margin-top: 3px; color: var(--brass); font-size: 11.5px; }
   #purse b { font-family: var(--coin); font-size: 15px; color: var(--brass); font-variant-numeric: tabular-nums; }
   #purse kbd { font: inherit; font-family: var(--coin); color: var(--paper);
                border: 1px solid var(--wood-line); border-radius: 3px; padding: 0 4px; }
@@ -101,6 +111,12 @@
   .thread:last-child { border-bottom: 0; }
   .between { font-size: 12px; color: var(--paper-dim); margin-bottom: 9px;
              display: flex; justify-content: space-between; gap: 10px; }
+  .thread.yours { border-left: 2px solid var(--brass); padding-left: 10px; }
+  .picker { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .picker button { background: none; border: 1px solid var(--wood-line); color: var(--paper-dim);
+                   border-radius: 99px; padding: 4px 11px; font-size: 12px; cursor: pointer; }
+  .picker button:hover { color: var(--paper); }
+  .picker button.on { border-color: var(--brass); color: var(--brass); }
   .said { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; margin: 7px 0;
           font-family: var(--serif); font-size: 14px; line-height: 1.45; }
   .said .name { font-weight: 600; text-align: right; font-size: 13px; padding-top: 1px; }
@@ -151,7 +167,9 @@
   <div id="left">
     <div id="link" hidden></div>
     <div id="offers"></div>
-    <div id="purse">You carry <b id="coins">100</b> coins
+    <div id="civic"></div>
+    <div id="purse"><span id="when">Day 1</span> &nbsp;·&nbsp; You carry <b id="coins">100</b> coins
+      <div id="gov"></div>
       &nbsp;<kbd>W A S D</kbd> walk &nbsp;<kbd>E</kbd> turn to someone</div>
     <canvas id="game"></canvas>
     <div id="bottom">
@@ -227,7 +245,8 @@ connect();
 /* ---------- who each resident is, in their own terms ---------- */
 const TRADE = {
   mira: 'keeps the shop',  bram: 'runs the bank', wren: 'works for wages',
-  fig:  'grows the food',  kit:  'no honest trade'
+  fig:  'grows the food',  kit:  'no honest trade',
+  orla: 'sitting alderman', devi: 'speaks for the workers'
 };
 /* A face is the fastest way to stop reading someone as a row of numbers.
    Pixel rects, so the portraits match the sprites in the town. */
@@ -239,7 +258,11 @@ const FEATURE = {
   wren: () => `<rect x="3" y="3" width="18" height="4" fill="#c86f6f"/>`,              // headscarf
   fig:  () => `<rect x="1" y="5" width="22" height="2" fill="#d9bb72"/>
                <rect x="5" y="2" width="14" height="3" fill="#d9bb72"/>`,              // straw hat
-  kit:  () => `<path d="M2 8 L12 1 L22 8 L22 11 L2 11 Z" fill="#4a3350"/>`             // hood
+  kit:  () => `<path d="M2 8 L12 1 L22 8 L22 11 L2 11 Z" fill="#4a3350"/>`,            // hood
+  orla: () => `<rect x="4" y="2" width="16" height="3" fill="#6d3f4b"/>
+               <rect x="9" y="14" width="6" height="3" fill="#efe3cb"/>`,              // sash + collar
+  devi: () => `<rect x="3" y="3" width="18" height="3" fill="#3f6d6a"/>
+               <rect x="2" y="6" width="4" height="7" fill="#3f6d6a"/>`                // headwrap
 };
 function portrait(a) {
   const skin = '#e3bd95';
@@ -313,6 +336,14 @@ document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('on', p.id === b.dataset.p));
 });
+document.getElementById('talk').addEventListener('click', e => {
+  const b = e.target.closest('[data-with]');
+  if (b) { talkWith = b.dataset.with; if (S) drawTalk(); }
+});
+document.getElementById('civic').addEventListener('click', e => {
+  const v = e.target.closest('[data-vote]');
+  if (v) send({ type: 'vote', agent: v.dataset.vote });
+});
 document.getElementById('offers').addEventListener('click', e => {
   const yes = e.target.closest('[data-yes]'), no = e.target.closest('[data-no]');
   if (yes) send({ type: 'offer', id: +yes.dataset.yes, accept: true });
@@ -327,7 +358,7 @@ document.getElementById('shop').addEventListener('click', e => {
 const ROOF = { shop: '#8c4b32', bank: '#54617e', farm: '#6b7a43', tavern: '#7a4a5e',
                square: '#7d7455', stall_a: '#9a6f3c', stall_b: '#9a6f3c' };
 const SIGN = { shop: 'The Shop', bank: 'The Bank', farm: 'The Farm', tavern: 'The Tavern',
-               square: 'The Square', stall_a: 'Market plot', stall_b: 'Market plot' };
+               square: 'The Square', stall_a: 'Market pitch', stall_b: 'Market pitch' };
 /* A plot with an owner gets their shop's name on the sign. */
 const shopAt = place => (S.shops || []).find(sh => sh.place === place);
 
@@ -361,6 +392,7 @@ function render() {
 
   scenery(T);
   for (const [n, p] of Object.entries(S.map.places)) building(n, p, T);
+  nightfall(T);
   const cast = [...S.agents.map(a => ({ x: a.x, y: a.y, color: a.color, name: a.name,
                                        say: a.say, id: a.id })),
                 { x: player.x, y: player.y, color: '#e8e2d4', name: 'You', say: '', you: true }];
@@ -372,9 +404,17 @@ function render() {
   for (const c of cast) if (c.say) bubble(c.x * T, c.y * T - T * .62 * 1.55, c.say, T, bubbles);
 
   document.getElementById('coins').textContent = S.player.cash;
+  const c = S.clock ?? 0;
+  const part = c < .25 ? 'Morning' : c < .5 ? 'Midday' : c < .72 ? 'Afternoon'
+             : c < .85 ? 'Evening' : 'Night';
+  document.getElementById('when').textContent = `Day ${S.day} · ${part}`;
+  const gov = document.getElementById('gov');
+  gov.innerHTML = S.mayor_name
+    ? `${esc(S.mayor_name)} governs — ${esc(S.policy)}`
+    : `No mayor yet — the town votes in ${S.election_in} day${S.election_in === 1 ? '' : 's'}`;
   if (!who.options.length)
     who.innerHTML = S.agents.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
-  drawOffers(); drawPeople(); drawTalk(); drawShop(); drawLedger(); drawNews();
+  drawCivic(); drawOffers(); drawPeople(); drawTalk(); drawShop(); drawLedger(); drawNews();
 }
 
 /* Fixed props, so the empty corners read as the edge of a town rather than dead space. */
@@ -411,6 +451,25 @@ function scenery(T) {
   ctx.beginPath(); ctx.ellipse(wx, wy, T * .34, T * .24, 0, 0, 7); ctx.fill();
 }
 
+/* One wash over the whole map, easing in and out, so dusk reads as dusk. */
+function nightfall(T) {
+  const c = S.clock ?? 0, from = 0.72, dusk = 0.06;
+  let dark = 0;
+  if (c >= from) dark = Math.min(1, (c - from) / dusk);
+  if (c > 0.97) dark = Math.max(0, (1 - c) / 0.03);
+  if (c < 0.04) dark = Math.max(dark, 1 - c / 0.04);
+  if (dark <= 0.01) return;
+  ctx.fillStyle = `rgba(18, 22, 48, ${0.62 * dark})`;
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  for (const [n, p] of Object.entries(S.map.places)) {          // lamplight in the windows
+    if (n === 'square' || (S.plots || []).includes(n)) continue;
+    const [x, y, w, h] = p, eaves = h * T * .34;
+    ctx.fillStyle = `rgba(255, 200, 110, ${0.8 * dark})`;
+    ctx.fillRect(x * T + T * .45, y * T + eaves + T * .35, T * .55, T * .55);
+    ctx.fillRect((x + w) * T - T, y * T + eaves + T * .35, T * .55, T * .55);
+  }
+}
+
 function building(name, [x, y, w, h], T) {
   const px = x * T, py = y * T, pw = w * T, ph = h * T, eaves = ph * .34;
   const mine = shopAt(name), plot = (S.plots || []).includes(name);
@@ -421,8 +480,20 @@ function building(name, [x, y, w, h], T) {
     for (let i = 0; i < w; i++) for (let j = 0; j < h; j++)
       if ((i * 5 + j * 3) % 4 === 0) ctx.fillRect((x + i) * T, (y + j) * T, T, T);
   } else if (plot && !mine) {                       // an empty pitch, waiting for someone
-    ctx.strokeStyle = '#8e7c55'; ctx.lineWidth = 2; ctx.setLineDash([6, 5]);
-    ctx.strokeRect(px, py, pw, ph); ctx.setLineDash([]);
+    ctx.fillStyle = '#8b7a55';                      // trodden ground
+    ctx.fillRect(px + T * .2, py + ph * .45, pw - T * .4, ph * .5);
+    ctx.fillStyle = '#6f5c38';                      // four corner stakes
+    for (const [sx, sy] of [[0, 0], [1, 0], [0, 1], [1, 1]])
+      ctx.fillRect(px + T * .15 + sx * (pw - T * .5), py + ph * .3 + sy * (ph * .45),
+                   T * .18, ph * .38);
+    const sx = px + pw / 2 - T * .75, sy = py + T * .1;   // a small board on a post
+    ctx.fillStyle = '#6f5c38'; ctx.fillRect(px + pw / 2 - T * .07, sy, T * .14, ph * .5);
+    ctx.fillStyle = '#e3d5b4'; ctx.fillRect(sx, sy, T * 1.5, T * .62);
+    ctx.fillStyle = '#6f5c38'; ctx.strokeStyle = '#6f5c38'; ctx.lineWidth = 1.5;
+    ctx.strokeRect(sx, sy, T * 1.5, T * .62);
+    ctx.font = `${Math.max(8, T * .34)}px "Iowan Old Style", Palatino, Georgia, serif`;
+    ctx.textAlign = 'center'; ctx.fillStyle = '#4a3c25';
+    ctx.fillText('to let', px + pw / 2, sy + T * .46);
   } else if (plot) {                                // a market stall: awning on posts
     ctx.fillStyle = '#6b5433';
     ctx.fillRect(px + T * .1, py + eaves, T * .2, ph - eaves);
@@ -475,7 +546,8 @@ function sprite({ x, y, color, id, you }, T) {
   ctx.fillStyle = '#b4835f';                          // mouth
   ctx.fillRect(px - u * .14, py - u * .46, u * .28, u * .08);
 
-  const hat = { wren: '#c86f6f', fig: '#d9bb72', kit: '#4a3350', mira: '#8a5a2c', bram: '#3f4a63' }[id];
+  const hat = { wren: '#c86f6f', fig: '#d9bb72', kit: '#4a3350', mira: '#8a5a2c',
+                bram: '#3f4a63', orla: '#6d3f4b', devi: '#3f6d6a' }[id];
   if (hat) {
     ctx.fillStyle = hat;
     ctx.fillRect(px - u * .58, py - u * 1.34, u * 1.16, u * .26);
@@ -547,14 +619,28 @@ function bubble(px, py, text, T, taken) {
 }
 
 /* ---------- panels ---------- */
+function drawCivic() {
+  const el = document.getElementById('civic');
+  if (S.ballot && S.ballot.length) {
+    el.innerHTML = `<h4>Election day</h4>
+      <p>${S.ballot.map(c => `<b style="color:${c.color}">${esc(c.name)}</b> would ${esc(c.pitch)}`)
+             .join('<br>')}</p>
+      <div class="row">${S.ballot.map(c =>
+        `<button class="btn primary" data-vote="${c.id}">Vote ${esc(c.name)}</button>`).join('')}</div>`;
+  } else {
+    el.innerHTML = '';
+  }
+}
+
 function drawOffers() {
   const ps = S.proposals || [];
-  document.getElementById('offers').innerHTML = ps.map(p => `
+  document.getElementById('offers').innerHTML = ps.slice(-2).map(p => `
     <div class="offer">
       <p><b style="color:${p.color}">${esc(p.name)}</b> offers you ${esc(p.text)}.</p>
       <div class="row">
         <button class="btn primary" data-yes="${p.id}">Accept</button>
         <button class="btn" data-no="${p.id}">No thanks</button>
+        <span class="lapse">lapses shortly</span>
       </div>
     </div>`).join('');
 }
@@ -575,6 +661,7 @@ function drawPeople() {
         <div class="vitals">
           <span class="coins">${a.cash} coins</span>
           <span>${feeling(a.energy)}</span>
+          ${a.action === 'slept' ? '<span>asleep</span>' : ''}
           ${a.debt ? `<span class="owing">owes ${a.debt}</span>` : ''}
           ${a.employer ? `<span>hired by ${esc((S.agents.find(x => x.id === a.employer) || {}).name || a.employer)}</span>` : ''}
         </div>
@@ -582,19 +669,42 @@ function drawPeople() {
     </article>`).join('');
 }
 
+let talkWith = 'all';         // 'all', 'mine', or an agent id
+
 function drawTalk() {
-  const cs = (S.conversations || []).slice().reverse();
-  document.getElementById('talk').innerHTML = cs.length ? cs.map(c => `
-    <section class="thread">
+  const all = S.conversations || [];
+  const people = S.agents.map(a => a.id);
+  const pick = (id, label) =>
+    `<button class="${talkWith === id ? 'on' : ''}" data-with="${id}">${esc(label)}</button>`;
+
+  let shown = all;
+  if (talkWith === 'mine') shown = all.filter(c => c.mine);
+  else if (talkWith !== 'all') shown = all.filter(c => c.a === talkWith || c.b === talkWith);
+
+  const picker = `<div class="picker">
+      ${pick('all', 'Everyone')}${pick('mine', 'Your chats')}
+      ${people.map(id => pick(id, (S.agents.find(a => a.id === id) || {}).name)).join('')}
+    </div>`;
+
+  const body = shown.length ? shown.map(c => {
+    // your own threads read as a chat you can scroll back through
+    const other = c.mine ? (c.a === 'stranger' ? 1 : 0) : null;
+    const title = c.mine
+      ? `You and <b style="color:${c.colors[other]}">${esc(c.names[other])}</b>`
+      : `<b style="color:${c.colors[0]}">${esc(c.names[0])}</b> and
+         <b style="color:${c.colors[1]}">${esc(c.names[1])}</b>`;
+    return `<section class="thread ${c.mine ? 'yours' : ''}">
       <div class="between">
-        <span><b style="color:${c.colors[0]}">${esc(c.names[0])}</b> and
-              <b style="color:${c.colors[1]}">${esc(c.names[1])}</b></span>
-        <span class="${c.closed ? '' : 'still'}">${c.closed ? 'done' : 'still talking'}</span>
+        <span>${title}</span>
+        <span class="${c.closed ? '' : 'still'}">${c.closed ? c.lines.length + ' lines' : 'still talking'}</span>
       </div>
       ${c.lines.map(l => `<div class="said">
           <span class="name" style="color:${l.speaker === c.a ? c.colors[0] : c.colors[1]}">${esc(l.name)}</span>
           <span>${esc(l.text)}</span></div>`).join('')}
-    </section>`).join('') : '<p class="quiet">The square is quiet. Nobody has struck up a conversation yet.</p>';
+    </section>`;
+  }).join('') : '<p class="quiet">Nothing said here yet.</p>';
+
+  document.getElementById('talk').innerHTML = picker + body;
 }
 
 function drawShop() {
@@ -630,6 +740,11 @@ function drawLedger() {
     ${S.agents.map(a => `<div class="line"><span>${nm(a.id)}</span>
       <span class="amt">${a.cash}${a.debt ? ` <span class="out">−${a.debt} owed</span>` : ''}</span></div>`).join('')}
     <div class="line"><span>The bank's reserves</span><span class="amt">${S.bank_reserves}</span></div>
+
+    <div class="heading">The town</div>
+    <div class="line"><span>Treasury</span><span class="amt">${S.treasury ?? 0}</span></div>
+    <div class="line"><span>Mayor</span><span class="r">${esc(S.mayor_name || 'none yet')}</span></div>
+    <div class="line"><span>Law in force</span><span class="r">${esc(S.policy || 'none')}</span></div>
 
     <div class="heading">Who works for whom</div>
     ${rows(S.agents.filter(a => a.employer).map(a =>

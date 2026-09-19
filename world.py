@@ -1,5 +1,5 @@
 """Untitled Town: world state, agents, economy. The server is the single source of truth."""
-import math, random, time, json
+import math, os, random, time, json
 from dataclasses import dataclass, field
 
 import catalog
@@ -14,11 +14,39 @@ PLACES = {
     "farm":   (3, 13, 8, 5, "#4a7c3f"),
     "tavern": (24, 13, 7, 5, "#7a4a6a"),
     "square": (14, 8, 6, 5, "#6b6b52"),
-    "stall_a": (13, 15, 4, 3, "#8a6b3f"),
-    "stall_b": (22, 5, 4, 3, "#8a6b3f"),
+    "stall_a": (12, 15, 4, 3, "#8a6b3f"),
+    "stall_b": (18, 3, 4, 3, "#8a6b3f"),
 }
 PLOTS = ("stall_a", "stall_b")      # market plots a worker can set up on
 STALL_COST = 55                     # what it takes to open for business
+
+DAY_SECONDS = float(os.getenv("DAY_SECONDS", "240"))   # one full day and night
+NIGHT_FROM = 0.72                   # the point in the day when the light goes
+ELECTION_EVERY = 5                  # the town votes on every fifth day
+
+# A promise is only worth something if winning actually changes a rule.
+POLICIES = {
+    "cheap_bread": {
+        "pitch": "cap the price of food so nobody goes hungry",
+        "law": "Food is capped at 4 coins.",
+        "helps": "buyers",
+    },
+    "free_market": {
+        "pitch": "let trade run free and make it cheap to open a stall",
+        "law": f"Market plots cost {STALL_COST // 2} coins and shopkeepers price as they please.",
+        "helps": "owners",
+    },
+    "workers_stipend": {
+        "pitch": "pay every working man and woman a daily stipend from the town purse",
+        "law": "Anyone without a shop draws 5 coins a day from the treasury.",
+        "helps": "workers",
+    },
+    "cheap_credit": {
+        "pitch": "force the bank to lend at half the interest",
+        "law": "The bank may charge only 10% interest.",
+        "helps": "debtors",
+    },
+}
 
 
 def place_center(name):
@@ -91,7 +119,8 @@ class Conversation:
     lines: list = field(default_factory=list)   # {"speaker", "name", "text"}
     started: float = 0.0
     last_t: float = 0.0
-    closed: bool = False
+    closed: bool = True        # closed means "not mid-exchange", never "gone"
+    session_from: int = 0      # where the current exchange began in lines
 
     @property
     def pair(self):
@@ -127,6 +156,8 @@ class Agent:
     employer: str = ""      # who pays this agent's wage
     wage: int = 0           # coins per work cycle, paid FROM the employer's purse
     produces: str = ""      # a producer makes this good instead of earning a wage
+    politician: bool = False
+    promise: str = ""       # the policy they are running on
 
     def remember(self, text, importance=1, source="self"):
         self.memories.append(Memory(text, time.time(), importance, source))
@@ -165,6 +196,16 @@ def make_agents():
               "Sell produce to the shop at a good wholesale price.",
               "Secretly undercuts Mira by selling direct, to hurt her business.",
               "#c78a5a", "farm", cash=60, produces="Apples"),
+        Agent("orla", "Orla", "Alderman",
+              "The sitting alderman. Speaks in polished, careful sentences and never quite says no.",
+              "Win the election and keep the merchants on side.",
+              "Takes quiet gifts from shopkeepers and calls them campaign support.",
+              "#d0857f", "square", cash=90, politician=True),
+        Agent("devi", "Devi", "Agitator",
+              "A firebrand who speaks for the working people. Blunt, warm, quick to anger.",
+              "Win the election and shift the town's coin toward those who work for it.",
+              "Would take the job for the power as much as the people.",
+              "#7fc4c0", "tavern", cash=22, politician=True),
         Agent("kit", "Kit", "Drifter", "A drifter and con artist. Charming, evasive, never answers straight.",
               "Get rich without ever working.", "Lies about who they are and spreads false rumours.",
               "#c06fc0", "tavern", cash=8),
@@ -188,10 +229,17 @@ def make_agents():
     byid["fig"].trust["mira"] = -0.4
     byid["mira"].trust["fig"] = -0.3
     byid["kit"].trust["wren"] = 0.3
+    byid["orla"].remember("Mira's coin keeps my campaign alive. She will expect a return.", 4)
+    byid["devi"].remember("Wren works herself raw for six coins a shift. That is the whole argument.", 4)
+    byid["orla"].trust["devi"] = -0.35
+    byid["devi"].trust["orla"] = -0.4
+    byid["mira"].trust["orla"] = 0.4
     return {x.id: x for x in a}
 
 
 ACTIONS = """move_to(place) | talk_to(agent, intent) | work | rest | gossip(agent, about, claim) |
+promise(policy)                — candidates only: pledge cheap_bread, free_market,
+                                 workers_stipend or cheap_credit
 buy(item)                      — buy one unit from whichever shop sells it cheapest
 sell_to(agent, item, qty, price)  — sell goods you own (arg = "item, quantity, price EACH")
 buy_from(agent, item, qty, price) — buy goods off another agent (arg = "item, quantity, price EACH")
@@ -234,6 +282,14 @@ class World:
         self.last_pitch = {}          # agent id -> when they last pitched the player
         self.wanted = []              # what Mira has asked the supplier for
         self.day = 1
+        self.day_started = time.time()
+        self.phase = "day"
+        self.treasury = 60
+        self.mayor = ""
+        self.policy = ""
+        self.election_today = False
+        self.ballot_open = False
+        self.votes = {}
         self.started = time.time()
         # The player is an Agent like anyone else — just one the model never drives.
         # Without this, agents had no one to sell to when you asked them to.
@@ -298,7 +354,7 @@ class World:
     def expire_proposals(self):
         now = time.time()
         for p in list(self.proposals):
-            if now - p["t"] > 90:
+            if now - p["t"] > 40:
                 self.proposals.remove(p)
 
     def party(self, ident):
@@ -350,37 +406,55 @@ class World:
                 if o.id != agent.id and (o.x - agent.x) ** 2 + (o.y - agent.y) ** 2 < radius ** 2]
 
     def active_convo(self, a_id, b_id):
-        pair = frozenset((a_id, b_id))
-        for c in reversed(self.conversations):
-            if not c.closed and c.pair == pair:
-                return c
-        return None
+        c = self.thread(a_id, b_id, create=False)
+        return c if (c and not c.closed) else None
 
-    def open_convo(self, a_id, b_id):
+    def thread(self, a_id, b_id, create=True):
+        """The one lasting conversation between these two. It is never thrown away —
+        exchanges open and close inside it, but the history stays."""
+        pair = frozenset((a_id, b_id))
+        for c in self.conversations:
+            if c.pair == pair:
+                return c
+        if not create:
+            return None
         self.convo_seq += 1
         c = Conversation(self.convo_seq, a_id, b_id, started=time.time(), last_t=time.time())
         self.conversations.append(c)
-        if len(self.conversations) > 24:
-            self.conversations = self.conversations[-24:]
+        return c
+
+    def say_into(self, speaker, listener, text):
+        """Append a line to the lasting thread between two people."""
+        c = self.thread(speaker.id, listener.id)
+        c.lines.append({"speaker": speaker.id, "name": speaker.name, "text": text})
+        if len(c.lines) > 80:
+            c.lines = c.lines[-80:]
+            c.session_from = max(0, c.session_from - 1)
+        c.last_t = time.time()
+        return c
+
+    def open_convo(self, a_id, b_id):
+        c = self.thread(a_id, b_id)
+        c.closed = False
+        c.session_from = len(c.lines)
         return c
 
     def close_convo(self, c):
-        """End a thread: each side keeps one summarising memory and nudges trust."""
+        """End the current exchange. The thread and its history remain."""
         c.closed = True
         self.convo_cooldown[c.pair] = time.time() + CONVO_COOLDOWN
         a, b = self.party(c.a), self.party(c.b)
         if not (a and b):
             return
+        session = c.lines[c.session_from:]
         for me, them in ((a, b), (b, a)):
-            theirs = [l["text"] for l in c.lines if l["speaker"] == them.id]
-            mine = [l["text"] for l in c.lines if l["speaker"] == me.id]
-            # keep both closing lines: the terms live there, and one line lost every deal
+            theirs = [l["text"] for l in session if l["speaker"] == them.id]
+            mine = [l["text"] for l in session if l["speaker"] == me.id]
             note = f"I talked with {them.name}. They said: {theirs[-1] if theirs else 'little'}"
             if mine:
                 note += f" I said: {mine[-1]}"
             me.remember(note + " If we agreed anything, act on it now.", 4, source=them.id)
             self.adjust_trust(me, them.id, 0.04)
-            # act on the agreement while it is still fresh
             me.next_tick = min(me.next_tick, time.time() + 2.0)
 
     def convo_transcript(self, ag, limit=8):
@@ -390,18 +464,193 @@ class World:
             if True:
                 other_id = c.b if c.a == ag.id else c.a
                 other = self.party(other_id)
-                lines = "\n".join(f"{l['name']}: {l['text']}" for l in c.lines[-limit:])
-                return other, lines, len(c.lines)
+                recent = c.lines[max(c.session_from, len(c.lines) - limit):]
+                lines = "\n".join(f"{l['name']}: {l['text']}" for l in recent)
+                return other, lines, len(c.lines) - c.session_from
         return None, "", 0
 
     def adjust_trust(self, agent, other_id, delta):
         cur = agent.trust.get(other_id, 0.0)
         agent.trust[other_id] = round(max(-1.0, min(1.0, cur + delta)), 2)
 
+    def election_in(self):
+        return ELECTION_EVERY - (self.day % ELECTION_EVERY)
+
+    def candidates(self):
+        return [a for a in self.agents.values() if a.politician]
+
+    def price_ceiling(self, good_name):
+        """cheap_bread is a real law: it holds food down whatever a shopkeeper wants."""
+        if self.policy == "cheap_bread" and good_name in ("Bread", "Apples"):
+            return 4
+        return None
+
+    def stall_cost(self):
+        return STALL_COST // 2 if self.policy == "free_market" else STALL_COST
+
+    def rate(self):
+        return 0.1 if self.policy == "cheap_credit" else self.interest_rate
+
+    def enforce_policy(self):
+        cap_applied = False
+        for _, g in self.all_goods():
+            cap = self.price_ceiling(g["name"])
+            if cap is not None and g["price"] > cap:
+                g["price"] = cap
+                cap_applied = True
+        return cap_applied
+
+    def clock(self):
+        """How far through the day we are, 0 at dawn and 1 at the end of night."""
+        return ((time.time() - self.day_started) % DAY_SECONDS) / DAY_SECONDS
+
+    def is_night(self):
+        return self.clock() >= NIGHT_FROM
+
+    def time_tick(self):
+        """Roll the day over, and put the town to bed when the light goes."""
+        was_night = self.phase == "night"
+        now_night = self.is_night()
+
+        if time.time() - self.day_started >= DAY_SECONDS:
+            self.day_started += DAY_SECONDS
+            self.day += 1
+            self.phase = "day"
+            for ag in self.agents.values():
+                ag.energy = min(100, ag.energy + 55)      # a night's sleep
+                ag.remember(f"Day {self.day} began.", 2)
+                ag.next_tick = min(ag.next_tick, time.time() + random.uniform(0, 4))
+            self.event(f"Day {self.day} — the town wakes.")
+            self.on_new_day()
+            return
+
+        if now_night and not was_night:
+            self.phase = "night"
+            for ag in self.agents.values():
+                # the drifter keeps his own hours; everyone else goes home
+                if ag.id == "kit":
+                    ag.remember("Night. The town sleeps and I am wide awake.", 3)
+                    continue
+                ag.tx, ag.ty = place_center(ag.home)
+                ag.remember("Night fell. Time to head home and sleep.", 2)
+            self.event("Night falls; the town heads home.")
+        elif not now_night and was_night:
+            self.phase = "day"
+
+    def on_new_day(self):
+        if self.ballot_open:
+            self.count_votes()
+        self.election_today = False
+        self.pay_stipend()
+        self.enforce_policy()
+        if self.day % ELECTION_EVERY == 0:
+            self.open_ballot()
+        else:
+            days = ELECTION_EVERY - (self.day % ELECTION_EVERY)
+            if days <= 2:
+                for ag in self.agents.values():
+                    ag.remember(f"The election is {days} day(s) away.", 3)
+
+    def open_ballot(self):
+        self.election_today = True
+        self.ballot_open = True
+        self.votes = {}
+        for c in self.candidates():
+            if not c.promise:
+                c.promise = random.choice(list(POLICIES))
+        pitch = "; ".join(f"{c.name} would {POLICIES[c.promise]['pitch']}" for c in self.candidates())
+        for ag in self.agents.values():
+            ag.remember(f"Election day. {pitch}. I must decide who to back.", 5)
+            ag.next_tick = min(ag.next_tick, time.time() + random.uniform(0, 5))
+        self.event(f"ELECTION DAY — {pitch}")
+
+    def stands_to_gain(self, voter, policy):
+        """How much this voter's own circumstances favour a policy. Self-interest,
+        not ideology — which is what makes the promises worth making."""
+        owns = self.shop_of(voter.id) is not None
+        owes = sum(voter.debts.values())
+        if policy == "cheap_bread":
+            return 0.0 if owns else 0.5
+        if policy == "free_market":
+            return 0.7 if owns else (0.3 if voter.cash >= self.stall_cost() else -0.2)
+        if policy == "workers_stipend":
+            return -0.3 if owns else 0.7
+        if policy == "cheap_credit":
+            return 0.6 if owes > 0 else 0.05
+        return 0.0
+
+    def count_votes(self):
+        cands = self.candidates()
+        if not cands:
+            return
+        tally = {c.id: 0 for c in cands}
+        detail = []
+        for ag in self.agents.values():
+            if ag.politician:
+                continue
+            pick = max(cands, key=lambda c: ag.trust.get(c.id, 0) * 0.6
+                       + self.stands_to_gain(ag, c.promise))
+            tally[pick.id] += 1
+            detail.append(f"{ag.name} backed {pick.name}")
+            ag.remember(f"I voted for {pick.name}, who promised to "
+                        f"{POLICIES[pick.promise]['pitch']}.", 4)
+        for cid, n in self.votes.items():                       # the player's ballot
+            if cid in tally:
+                tally[cid] += n
+                detail.append(f"You backed {self.agents[cid].name}")
+
+        top = max(tally.values())
+        winners = [c for c in cands if tally[c.id] == top]
+        winner = random.choice(winners)
+        self.mayor = winner.id
+        self.policy = winner.promise
+        self.ballot_open = False
+        law = POLICIES[self.policy]["law"]
+        capped = self.enforce_policy()
+
+        score = ", ".join(f"{c.name} {tally[c.id]}" for c in cands)
+        self.event(f"ELECTION RESULT — {winner.name} won ({score}). New law: {law}")
+        for ag in self.agents.values():
+            ag.remember(f"{winner.name} won the election. The law now says: {law}", 5)
+            ag.next_tick = min(ag.next_tick, time.time() + random.uniform(0, 6))
+        winner.remember(f"I won. I promised to {POLICIES[self.policy]['pitch']} "
+                        f"and now I must live with it.", 5)
+        for c in cands:
+            if c.id != winner.id:
+                c.remember(f"I lost to {winner.name}. Next time.", 5)
+                c.promise = ""
+        if capped:
+            self.event("Shopkeepers had to drop their prices to meet the new law.")
+
+    def pay_stipend(self):
+        if self.policy != "workers_stipend":
+            return
+        for ag in self.agents.values():
+            if self.shop_of(ag.id) or ag.politician:
+                continue
+            if self.treasury < 5:
+                self.event("The treasury is empty; no stipend was paid today.")
+                return
+            self.treasury -= 5
+            ag.cash += 5
+            ag.remember("I drew my 5 coin stipend from the town purse.", 3)
+        self.event("The workers' stipend was paid out of the treasury.")
+
+    def asleep(self, ag):
+        """Abed for the night — unless you are the drifter, or somebody is standing
+        over you, in which case you can be woken."""
+        if self.phase != "night" or ag.id == "kit":
+            return False
+        near_player = (self.you.x - ag.x) ** 2 + (self.you.y - ag.y) ** 2 < 9
+        return not near_player
+
     def townsfolk_tick(self):
         """The five residents are not the whole town. Ordinary townsfolk shop at Mira's,
         which is the only coin entering the economy — everything else is a transfer."""
         if time.time() < self.townsfolk_next:
+            return
+        if self.phase == "night":
+            self.townsfolk_next = time.time() + 8
             return
         self.townsfolk_next = time.time() + random.uniform(14, 22)
         on_sale = [(sh, g) for sh, g in self.all_goods() if g["qty"] > 2]
@@ -422,6 +671,10 @@ class World:
             owner.cash += price
             if good["qty"] == 0:
                 owner.remember(f"I have sold out of {good['name']}.", 3)
+        levy = max(0, round(price * 0.1))
+        if levy and owner:
+            owner.cash -= levy
+            self.treasury += levy
         self.flows.append({"t": time.strftime("%H:%M:%S"), "from": "Townsfolk",
                            "to": owner.name if owner else shop.name,
                            "amount": price, "why": f"bought {good['name']}"})
@@ -432,6 +685,7 @@ class World:
 
     # ---------- fast tick: movement only, never waits on the LLM ----------
     def step(self, dt):
+        self.time_tick()
         self.townsfolk_tick()
         self.expire_proposals()
         for ag in self.agents.values():
@@ -512,13 +766,12 @@ class World:
                 other.next_tick = min(other.next_tick, time.time() + 1.0)
                 return f"waited for {other.name} to answer"
 
-            convo.lines.append({"speaker": ag.id, "name": ag.name, "text": line})
-            convo.last_t = time.time()
+            self.say_into(ag, other, line)
             ag.tx, ag.ty = other.x + 1, other.y
             other.remember(f"{ag.name} said: {line}", 2, source=ag.id)
             self.adjust_trust(other, ag.id, 0.05)
 
-            if len(convo.lines) >= MAX_CONVO_LINES:
+            if len(convo.lines) - convo.session_from >= MAX_CONVO_LINES:
                 self.close_convo(convo)
                 return f"finished talking with {other.name}"
             # let them answer while it is still their turn to care
@@ -689,6 +942,9 @@ class World:
                 return "did not name a price"
             cost = item["cost"]
             price = max(cost, min(cost * 3, want))          # never under cost, never over 3x
+            cap = self.price_ceiling(item["name"])
+            if cap is not None:
+                price = min(price, cap)
             old_price = item["price"]
             if price == old_price:
                 return f"left {item['name']} at {price} coins"
@@ -749,7 +1005,7 @@ class World:
                 amount = 20
             owed_already = other.debts.get(ag.id, 0)
             if not consented and other is self.you:
-                rate = self.interest_rate if ag.id == "bram" else 0.0
+                rate = self.rate() if ag.id == "bram" else 0.0
                 owed_preview = round(amount * (1 + rate))
                 terms = f" at {int(rate * 100)}% interest" if rate else ""
                 return self.propose(ag, "loan",
@@ -762,7 +1018,7 @@ class World:
                     return f"refused — {other.name} is already {owed_already} deep with the bank"
                 if self.bank_reserves - amount < 80:
                     return "the bank did not have the reserves"
-                rate = self.interest_rate
+                rate = self.rate()
                 self.bank_reserves -= amount
                 other.cash += amount
                 source = "Bank"
@@ -867,16 +1123,34 @@ class World:
             return (f"bought {units} {match['name']} from the supplier at {unit_cost} coins each "
                     f"({bill} in all), shelved at {shelf_price}")
 
+        if action in ("promise", "campaign", "pledge"):
+            if not ag.politician:
+                return "holds no office and stands for nothing"
+            want = (arg or target or "").strip().lower().replace(" ", "_")
+            key = next((k for k in POLICIES if k == want or want in k or k in want), None)
+            if key is None:
+                key = max(POLICIES, key=lambda k: self.stands_to_gain(ag, k))
+            if ag.promise == key:
+                return f"had already pledged to {POLICIES[key]['pitch']}"
+            ag.promise = key
+            pitch = POLICIES[key]["pitch"]
+            ag.speak(f"Elect me and I will {pitch}.")
+            for other in self.agents.values():
+                if other.id != ag.id:
+                    other.remember(f"{ag.name} is campaigning to {pitch}.", 4, source=ag.id)
+            self.event(f"{ag.name} pledged to {pitch}")
+            return f"pledged to {pitch}"
+
         if action in ("open_stall", "open_shop", "found_business"):
             if self.shop_of(ag.id):
                 return "already keeps a shop"
             plot = self.free_plot()
             if plot is None:
                 return "found no free plot in the market — every pitch is taken"
-            if ag.cash < STALL_COST:
-                return (f"needs {STALL_COST} coins to take a market plot and has only {ag.cash}. "
+            if ag.cash < self.stall_cost():
+                return (f"needs {self.stall_cost()} coins to take a market plot and has only {ag.cash}. "
                         f"Keep working, or ask Bram for the capital.")
-            ag.cash -= STALL_COST
+            ag.cash -= self.stall_cost()
             name = (arg or target or f"{ag.name}'s Stall").strip()[:28] or f"{ag.name}'s Stall"
             if ag.name.lower() not in name.lower():
                 name = f"{ag.name}'s {name}"
@@ -895,8 +1169,8 @@ class World:
             for other in self.agents.values():
                 if other.id != ag.id:
                     other.remember(f"{ag.name} has opened {name} in the market.", 3, source=ag.id)
-            self.event(f"{ag.name} OPENED {name} — {STALL_COST} coins down, working for themselves")
-            return (f"opened {name} for {STALL_COST} coins. The shelves are empty — "
+            self.event(f"{ag.name} opened {name} — working for themselves now")
+            return (f"opened {name} for {self.stall_cost()} coins. The shelves are empty — "
                     f"restock, or buy stock off Fig, then set prices")
 
         # anything the model invented that the world does not implement
@@ -919,6 +1193,8 @@ class World:
         return {
             "type": "state",
             "day": self.day,
+            "clock": round(self.clock(), 3),
+            "phase": self.phase,
             "tile": TILE,
             "map": {"w": MAP_W, "h": MAP_H, "places": PLACES},
             "agents": [{
@@ -940,16 +1216,26 @@ class World:
             "shop": [{**g, "shop": sh.name, "owner": sh.owner} for sh in self.shops for g in sh.goods],
             "plots": list(PLOTS),
             "bank_reserves": self.bank_reserves,
-            "interest_rate": self.interest_rate,
+            "interest_rate": self.rate(),
+            "treasury": self.treasury,
+            "mayor": self.mayor,
+            "mayor_name": self.agents[self.mayor].name if self.mayor in self.agents else "",
+            "policy": POLICIES[self.policy]["law"] if self.policy else "",
+            "ballot": [{"id": c.id, "name": c.name, "color": c.color,
+                        "pitch": POLICIES[c.promise]["pitch"] if c.promise else "has pledged nothing"}
+                       for c in self.candidates()] if self.ballot_open else [],
+            "election_in": self.election_in(),
             "flows": self.flows[-14:],
             "price_mult": round(self.price_mult, 2),
             "proposals": [{"id": p["id"], "name": p["name"], "color": p["color"],
                            "kind": p["kind"], "text": p["text"]} for p in self.proposals],
             "conversations": [{
                 "id": c.id, "a": c.a, "b": c.b, "closed": c.closed,
+                "mine": "stranger" in c.pair,
+                "last_t": round(c.last_t, 1),
                 "names": [self.party(c.a).name, self.party(c.b).name],
                 "colors": [self.party(c.a).color, self.party(c.b).color],
-                "lines": c.lines,
-            } for c in self.conversations[-8:]],
+                "lines": c.lines[-40:],
+            } for c in sorted(self.conversations, key=lambda c: c.last_t, reverse=True)[:14]],
             "log": self.log[-40:],
         }

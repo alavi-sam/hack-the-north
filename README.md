@@ -150,6 +150,44 @@ Kit ──no job, no goods──▶ must borrow, con, or talk coin out of people
 
 ---
 
+## 4c. Days, nights and elections
+
+**The clock.** A day lasts `DAY_SECONDS` (default 240s). At dusk everyone walks home and
+sleeps — sleeping costs no tokens, which also keeps the nights cheap. Kit the drifter is the
+exception: he keeps his own hours and works the dark alone. Standing next to a sleeper wakes
+them. The map takes a night wash and lamps come on in the windows.
+
+**Social mobility.** Two market pitches sit empty on the map marked "to let". Any agent with
+`STALL_COST` coins can `open_stall`: they leave their employer, become a shopkeeper with
+their own goods, costs and prices, and their goal is rewritten. Buyers — agents, townsfolk
+and the player — go to whichever shop is **cheapest**, so undercutting is a real strategy and
+a markup really costs you custom.
+
+**Politics.** Orla (the sitting alderman, quietly funded by shopkeepers) and Devi (an
+agitator for the workers) stand for election every `ELECTION_EVERY` days. They `promise` one
+of four policies and campaign by talking people round. On election day every resident votes
+on **self-interest weighted by trust** — a worker gains from a stipend, an owner from a free
+market, a debtor from cheap credit — and the player gets a ballot too.
+
+The winner's promise becomes law, and the law actually binds:
+
+| Policy | What it changes in the rules |
+|---|---|
+| `cheap_bread` | Food is capped at 4 coins; `set_price` cannot exceed it |
+| `free_market` | Market pitches cost half as much |
+| `workers_stipend` | Everyone without a shop draws 5 coins a day from the treasury |
+| `cheap_credit` | The bank may only charge 10% interest |
+
+The treasury fills from a 10% levy on townsfolk purchases, so a promise can bankrupt the town
+that voted for it.
+
+**Conversations are lasting.** Each pair of people has one thread that is never discarded —
+exchanges open and close inside it, but the history stays. Your own chats persist per person
+and are shown back to the agent when they reply, so you can pick a conversation up where you
+left it. The Talk tab filters by person, or by "Your chats".
+
+---
+
 ## 5. Shopify integration (real, not mocked)
 
 The Merchant's stock is pulled from the **Shopify Global Catalog MCP** (`https://catalog.shopify.com/api/ucp/mcp`, tool `search_catalog`). We already have a working script (`catalog.py`).
