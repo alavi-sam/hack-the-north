@@ -407,6 +407,15 @@ document.getElementById('shop').addEventListener('click', e => {
 /* ---------- the town ---------- */
 const ROOF = { shop: '#8c4b32', bank: '#54617e', farm: '#6b7a43', tavern: '#7a4a5e',
                square: '#7d7455', stall_a: '#9a6f3c', stall_b: '#9a6f3c' };
+const WALL = { shop: '#e2cfab', bank: '#d3d2c6', farm: '#d8c69c', tavern: '#dec5a4' };
+const TRIM = { shop: '#8a6a44', bank: '#79796f', farm: '#7d6a42', tavern: '#7b5a48' };
+
+/* Windows live in one place so the building and the night lamps never drift apart. */
+function windowSpots(px, py, pw, ph, T) {
+  const eaves = ph * .42, base = py + eaves, body = ph - eaves;
+  const wy = base + body * .17, ws = Math.min(T * .72, body * .38);
+  return [[px + pw * .17, wy, ws], [px + pw * .83 - ws, wy, ws]];
+}
 const SIGN = { shop: 'The Shop', bank: 'The Bank', farm: 'The Farm', tavern: 'The Tavern',
                square: 'The Square', stall_a: 'Market pitch', stall_b: 'Market pitch' };
 /* A plot with an owner gets their shop's name on the sign. */
@@ -536,11 +545,119 @@ function nightfall(T) {
   ctx.fillRect(0, 0, cv.width, cv.height);
   for (const [n, p] of Object.entries(S.map.places)) {          // lamplight in the windows
     if (n === 'square' || (S.plots || []).includes(n)) continue;
-    const [x, y, w, h] = p, eaves = h * T * .34;
-    ctx.fillStyle = `rgba(255, 200, 110, ${0.8 * dark})`;
-    ctx.fillRect(x * T + T * .45, y * T + eaves + T * .35, T * .55, T * .55);
-    ctx.fillRect((x + w) * T - T, y * T + eaves + T * .35, T * .55, T * .55);
+    const [x, y, w, h] = p;
+    ctx.fillStyle = `rgba(255, 198, 108, ${0.85 * dark})`;
+    for (const [wx, wy, ws] of windowSpots(x * T, y * T, w * T, h * T, T))
+      ctx.fillRect(wx, wy, ws, ws);
   }
+}
+
+function pane(x, y, s, trim) {
+  ctx.fillStyle = trim; ctx.fillRect(x - s * .1, y - s * .1, s * 1.2, s * 1.2);
+  ctx.fillStyle = '#9fc4d4'; ctx.fillRect(x, y, s, s);
+  ctx.fillStyle = 'rgba(255,255,255,.32)'; ctx.fillRect(x, y, s * .44, s * .44);
+  ctx.fillStyle = trim;                                        // glazing bars
+  ctx.fillRect(x + s * .44, y, s * .12, s);
+  ctx.fillRect(x, y + s * .44, s, s * .12);
+  ctx.fillStyle = '#b9ac93';                                   // sill
+  ctx.fillRect(x - s * .2, y + s * 1.1, s * 1.4, s * .16);
+}
+
+/* One characterful thing per building, so they are not four of the same house. */
+function trimmings(name, px, py, pw, ph, T, base, foot) {
+  if (name === 'shop') {
+    // just under the windows and over the doorway, not across the glass
+    const aw = pw * .54, ax = px + pw / 2 - aw / 2, ay = base + (foot - base) * .44, ah = T * .27;
+    for (let i = 0; i < 6; i++) {
+      ctx.fillStyle = i % 2 ? '#c4553f' : '#f4e8cf';
+      ctx.fillRect(ax + i * (aw / 6), ay, aw / 6, ah);
+    }
+    ctx.fillStyle = 'rgba(0,0,0,.22)'; ctx.fillRect(ax, ay + ah, aw, T * .07);
+    for (const bx of [px + T * .28, px + pw - T * .82]) {      // barrels by the door
+      ctx.fillStyle = '#8a6136'; ctx.fillRect(bx, foot - T * .6, T * .52, T * .6);
+      ctx.fillStyle = '#6d4c2a';
+      ctx.fillRect(bx, foot - T * .44, T * .52, T * .08);
+      ctx.fillRect(bx, foot - T * .22, T * .52, T * .08);
+    }
+  } else if (name === 'bank') {
+    for (const cx of [px + pw * .29, px + pw * .71 - T * .28]) {
+      ctx.fillStyle = '#eceadf'; ctx.fillRect(cx, base + (foot - base) * .2, T * .28, (foot - base) * .8);
+      ctx.fillStyle = '#cdc9ba';
+      ctx.fillRect(cx - T * .06, base + (foot - base) * .2, T * .4, T * .13);
+      ctx.fillRect(cx - T * .06, foot - T * .15, T * .4, T * .15);
+    }
+  } else if (name === 'farm') {
+    for (const hx of [px + T * .25, px + pw - T * 1.05]) {     // hay bales
+      ctx.fillStyle = '#cfa94e'; ctx.fillRect(hx, foot - T * .5, T * .8, T * .5);
+      ctx.fillStyle = '#b18c3a';
+      ctx.fillRect(hx, foot - T * .35, T * .8, T * .07);
+      ctx.fillRect(hx, foot - T * .17, T * .8, T * .07);
+    }
+  } else if (name === 'tavern') {
+    const bx = px + pw * .74, by = base + (foot - base) * .2;  // a hanging sign
+    ctx.fillStyle = '#5f4a33';
+    ctx.fillRect(bx, by, T * .62, T * .09);
+    ctx.fillRect(bx + T * .55, by, T * .08, T * .2);
+    ctx.fillStyle = '#e6d8b8'; ctx.fillRect(bx + T * .28, by + T * .2, T * .62, T * .46);
+    ctx.fillStyle = '#7b5a48'; ctx.fillRect(bx + T * .45, by + T * .3, T * .24, T * .26);
+    ctx.fillStyle = '#e6d8b8'; ctx.fillRect(bx + T * .69, by + T * .35, T * .08, T * .12);
+  }
+}
+
+function house(name, px, py, pw, ph, T) {
+  const eaves = ph * .42, base = py + eaves, foot = py + ph, body = ph - eaves;
+  const wall = WALL[name] || '#d8c7a6', trim = TRIM[name] || '#7d6a4e';
+
+  ctx.fillStyle = 'rgba(0,0,0,.17)';
+  ctx.beginPath(); ctx.ellipse(px + pw / 2, foot + T * .08, pw * .5, T * .2, 0, 0, 7); ctx.fill();
+
+  ctx.fillStyle = wall; ctx.fillRect(px, base, pw, body);
+  ctx.fillStyle = 'rgba(0,0,0,.07)'; ctx.fillRect(px, base, pw, body * .16);
+
+  ctx.fillStyle = trim;                                        // timber framing
+  const bays = Math.max(2, Math.round(pw / (T * 1.7)));
+  for (let i = 0; i <= bays; i++) {
+    const bx = Math.min(px + i * (pw / bays), px + pw - T * .13);
+    ctx.fillRect(Math.max(bx, px), base, T * .13, body);
+  }
+  ctx.fillRect(px, base + body * .5, pw, T * .11);
+
+  ctx.fillStyle = '#9c9483';                                   // stone footing
+  ctx.fillRect(px, foot - T * .4, pw, T * .4);
+  ctx.fillStyle = '#8a8271';
+  for (let i = 0; i * T * .78 < pw; i++)
+    ctx.fillRect(px + i * T * .78 + (i % 2 ? T * .22 : 0), foot - T * .4, T * .34, T * .4);
+
+  const ovr = T * .36;                                         // roof, with shingle courses
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(px - ovr, base); ctx.lineTo(px + pw / 2, py); ctx.lineTo(px + pw + ovr, base);
+  ctx.closePath(); ctx.clip();
+  ctx.fillStyle = ROOF[name] || '#7d6a4e';
+  ctx.fillRect(px - ovr, py, pw + ovr * 2, eaves);
+  ctx.fillStyle = 'rgba(0,0,0,.14)';
+  for (let yy = py + eaves * .26; yy < base; yy += Math.max(3, eaves * .21))
+    ctx.fillRect(px - ovr, yy, pw + ovr * 2, Math.max(1.5, eaves * .07));
+  ctx.fillStyle = 'rgba(255,255,255,.10)';
+  ctx.fillRect(px + pw / 2 - T * .07, py, T * .14, eaves);
+  ctx.restore();
+  ctx.fillStyle = 'rgba(0,0,0,.26)'; ctx.fillRect(px - ovr, base - T * .11, pw + ovr * 2, T * .13);
+
+  const chx = px + pw * .72;                                   // chimney
+  ctx.fillStyle = '#7e6a56'; ctx.fillRect(chx, py + eaves * .14, T * .42, eaves * .62);
+  ctx.fillStyle = '#6a5847'; ctx.fillRect(chx - T * .06, py + eaves * .14, T * .54, T * .14);
+
+  for (const [wx, wy, ws] of windowSpots(px, py, pw, ph, T)) pane(wx, wy, ws, trim);
+
+  const dw = Math.min(T * .8, pw * .22), dh = body * .54;      // door
+  const dx = px + pw / 2 - dw / 2, dy = foot - dh;
+  ctx.fillStyle = trim; ctx.fillRect(dx - T * .08, dy - T * .08, dw + T * .16, dh + T * .08);
+  ctx.fillStyle = '#6b4a2c'; ctx.fillRect(dx, dy, dw, dh);
+  ctx.fillStyle = 'rgba(0,0,0,.2)'; ctx.fillRect(dx + dw * .16, dy + dh * .12, dw * .68, dh * .36);
+  ctx.fillStyle = '#e0b559'; ctx.fillRect(dx + dw * .74, dy + dh * .52, T * .11, T * .11);
+  ctx.fillStyle = '#a89a80'; ctx.fillRect(dx - T * .14, foot, dw + T * .28, T * .15);
+
+  trimmings(name, px, py, pw, ph, T, base, foot);
 }
 
 function building(name, [x, y, w, h], T) {
@@ -553,48 +670,54 @@ function building(name, [x, y, w, h], T) {
     for (let i = 0; i < w; i++) for (let j = 0; j < h; j++)
       if ((i * 5 + j * 3) % 4 === 0) ctx.fillRect((x + i) * T, (y + j) * T, T, T);
   } else if (plot && !mine) {                       // an empty pitch, waiting for someone
-    ctx.fillStyle = '#8b7a55';                      // trodden ground
+    ctx.fillStyle = '#8b7a55';
     ctx.fillRect(px + T * .2, py + ph * .45, pw - T * .4, ph * .5);
-    ctx.fillStyle = '#6f5c38';                      // four corner stakes
+    ctx.fillStyle = '#6f5c38';
     for (const [sx, sy] of [[0, 0], [1, 0], [0, 1], [1, 1]])
       ctx.fillRect(px + T * .15 + sx * (pw - T * .5), py + ph * .3 + sy * (ph * .45),
                    T * .18, ph * .38);
-    const sx = px + pw / 2 - T * .75, sy = py + T * .1;   // a small board on a post
+    const sx = px + pw / 2 - T * .75, sy = py + T * .1;
     ctx.fillStyle = '#6f5c38'; ctx.fillRect(px + pw / 2 - T * .07, sy, T * .14, ph * .5);
     ctx.fillStyle = '#e3d5b4'; ctx.fillRect(sx, sy, T * 1.5, T * .62);
-    ctx.fillStyle = '#6f5c38'; ctx.strokeStyle = '#6f5c38'; ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#6f5c38'; ctx.lineWidth = 1.5;
     ctx.strokeRect(sx, sy, T * 1.5, T * .62);
     ctx.font = `${Math.max(8, T * .34)}px "Iowan Old Style", Palatino, Georgia, serif`;
     ctx.textAlign = 'center'; ctx.fillStyle = '#4a3c25';
     ctx.fillText('to let', px + pw / 2, sy + T * .46);
-  } else if (plot) {                                // a market stall: awning on posts
+  } else if (plot) {                                // a market stall, open to the square
+    ctx.fillStyle = 'rgba(0,0,0,.15)';
+    ctx.beginPath(); ctx.ellipse(px + pw / 2, py + ph, pw * .46, T * .16, 0, 0, 7); ctx.fill();
     ctx.fillStyle = '#6b5433';
     ctx.fillRect(px + T * .1, py + eaves, T * .2, ph - eaves);
     ctx.fillRect(px + pw - T * .3, py + eaves, T * .2, ph - eaves);
-    ctx.fillStyle = '#c9ae7c';
-    ctx.fillRect(px + T * .1, py + ph - T * .5, pw - T * .2, T * .5);   // counter
+    ctx.fillStyle = '#c9ae7c'; ctx.fillRect(px + T * .05, py + ph - T * .55, pw - T * .1, T * .55);
+    ctx.fillStyle = '#a98c5d'; ctx.fillRect(px + T * .05, py + ph - T * .55, pw - T * .1, T * .1);
+    for (let i = 0; i < 3; i++) {                   // goods on the counter
+      ctx.fillStyle = ['#b5503f', '#c9a13f', '#6f9152'][i];
+      ctx.fillRect(px + pw * (.2 + i * .25), py + ph - T * .8, T * .3, T * .26);
+    }
     const stripes = 6, sw = pw / stripes;
     for (let i = 0; i < stripes; i++) {
-      ctx.fillStyle = i % 2 ? '#c4553f' : '#efe3cb';
+      ctx.fillStyle = i % 2 ? '#c4553f' : '#f4e8cf';
       ctx.fillRect(px + i * sw, py, sw, eaves);
+      ctx.beginPath();                              // scalloped hem
+      ctx.arc(px + i * sw + sw / 2, py + eaves, sw / 2, 0, Math.PI);
+      ctx.fill();
     }
+    ctx.fillStyle = 'rgba(0,0,0,.18)'; ctx.fillRect(px, py, pw, T * .1);
   } else {
-    ctx.fillStyle = '#d8c7a6'; ctx.fillRect(px, py + eaves, pw, ph - eaves);
-    ctx.fillStyle = ROOF[name] || '#7d6a4e';
-    ctx.beginPath(); ctx.moveTo(px - T * .2, py + eaves);
-    ctx.lineTo(px + pw / 2, py); ctx.lineTo(px + pw + T * .2, py + eaves); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = '#7a5c3a';
-    ctx.fillRect(px + pw / 2 - T * .32, py + ph - T * .95, T * .64, T * .95);
-    ctx.fillStyle = '#8fb4c4';
-    ctx.fillRect(px + T * .45, py + eaves + T * .35, T * .55, T * .55);
-    ctx.fillRect(px + pw - T * 1, py + eaves + T * .35, T * .55, T * .55);
+    house(name, px, py, pw, ph, T);
   }
 
-  const label = mine ? mine.name : (SIGN[name] || name);
-  ctx.fillStyle = mine ? '#1e1710' : (plot ? '#5f5238' : '#2a211a');
-  ctx.font = `${Math.max(10, T * .44)}px "Iowan Old Style", Palatino, Georgia, serif`;
+  const label = mine ? mine.name : (SIGN[name] || name);      // a nameboard, not bare text
+  ctx.font = `${Math.max(10, T * .42)}px "Iowan Old Style", Palatino, Georgia, serif`;
   ctx.textAlign = 'center';
-  ctx.fillText(label, px + pw / 2, py + ph + T * .62);
+  const bw = ctx.measureText(label).width + T * .55, bh = Math.max(13, T * .58);
+  const bx = px + pw / 2 - bw / 2, by = py + ph + T * .26;
+  ctx.fillStyle = '#5f4a33'; ctx.fillRect(bx - 2, by - 2, bw + 4, bh + 4);
+  ctx.fillStyle = '#e8dcc0'; ctx.fillRect(bx, by, bw, bh);
+  ctx.fillStyle = 'rgba(0,0,0,.12)'; ctx.fillRect(bx, by + bh - bh * .22, bw, bh * .22);
+  ctx.fillStyle = '#3a2d1c'; ctx.fillText(label, px + pw / 2, by + bh * .73);
 }
 
 function sprite({ x, y, color, id, you }, T) {
