@@ -50,6 +50,14 @@
   #link { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); z-index: 3;
           background: var(--rust); color: #fff4ec; padding: 8px 14px; border-radius: 4px;
           font-size: 13px; }
+  /* Nothing leaves your purse unless you say yes here. */
+  #offers { position: absolute; right: 14px; top: 14px; z-index: 3;
+            display: flex; flex-direction: column; gap: 8px; max-width: 330px; }
+  .offer { background: rgba(30,23,16,.94); border: 1px solid var(--brass);
+           border-radius: 5px; padding: 10px 12px; }
+  .offer p { margin: 0 0 9px; font-family: var(--serif); font-size: 14px; line-height: 1.45; }
+  .offer p b { font-weight: 600; }
+  .offer .row { display: flex; gap: 7px; }
   #purse { position: absolute; left: 14px; top: 14px; background: rgba(30,23,16,.88);
            border: 1px solid var(--wood-line); border-radius: 4px; padding: 8px 12px;
            font-size: 12px; color: var(--paper-dim); backdrop-filter: blur(3px); }
@@ -142,6 +150,7 @@
 <div id="wrap">
   <div id="left">
     <div id="link" hidden></div>
+    <div id="offers"></div>
     <div id="purse">You carry <b id="coins">100</b> coins
       &nbsp;<kbd>W A S D</kbd> walk &nbsp;<kbd>E</kbd> turn to someone</div>
     <canvas id="game"></canvas>
@@ -304,6 +313,11 @@ document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('on', p.id === b.dataset.p));
 });
+document.getElementById('offers').addEventListener('click', e => {
+  const yes = e.target.closest('[data-yes]'), no = e.target.closest('[data-no]');
+  if (yes) send({ type: 'offer', id: +yes.dataset.yes, accept: true });
+  else if (no) send({ type: 'offer', id: +no.dataset.no, accept: false });
+});
 document.getElementById('shop').addEventListener('click', e => {
   const b = e.target.closest('[data-buy]');
   if (b) send({ type: 'buy', item: b.dataset.buy });
@@ -356,7 +370,7 @@ function render() {
   document.getElementById('coins').textContent = S.player.cash;
   if (!who.options.length)
     who.innerHTML = S.agents.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
-  drawPeople(); drawTalk(); drawShop(); drawLedger(); drawNews();
+  drawOffers(); drawPeople(); drawTalk(); drawShop(); drawLedger(); drawNews();
 }
 
 /* Fixed props, so the empty corners read as the edge of a town rather than dead space. */
@@ -511,6 +525,18 @@ function bubble(px, py, text, T, taken) {
 }
 
 /* ---------- panels ---------- */
+function drawOffers() {
+  const ps = S.proposals || [];
+  document.getElementById('offers').innerHTML = ps.map(p => `
+    <div class="offer">
+      <p><b style="color:${p.color}">${esc(p.name)}</b> offers you ${esc(p.text)}.</p>
+      <div class="row">
+        <button class="btn primary" data-yes="${p.id}">Accept</button>
+        <button class="btn" data-no="${p.id}">No thanks</button>
+      </div>
+    </div>`).join('');
+}
+
 function drawPeople() {
   const byId = {}; S.agents.forEach(x => byId[x.id] = x);
   document.getElementById('people').innerHTML = S.agents.map(a => `

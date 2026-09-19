@@ -204,6 +204,8 @@ class World:
         self.flows = []               # recent coin movements, for the Economy panel
         self.last_paid = {}           # (payer, payee) -> time, so handouts cannot loop
         self.offers = []              # supplier goods already fetched, ready to buy
+        self.proposals = []           # deals put TO the player, awaiting their yes or no
+        self.proposal_seq = 0
         self.wanted = []              # what Mira has asked the supplier for
         self.day = 1
         self.started = time.time()
@@ -227,6 +229,45 @@ class World:
         if len(self.flows) > 40:
             self.flows = self.flows[-40:]
         return amount
+
+    def propose(self, ag, kind, text, action, arg):
+        """Agents may offer the player a deal; only the player may accept it.
+        Nothing leaves your purse without you saying so."""
+        for old in self.proposals:
+            if old["from"] == ag.id and old["action"] == action and old["arg"] == arg:
+                return f"had already put that to the stranger"
+        self.proposal_seq += 1
+        self.proposals.append({"id": self.proposal_seq, "from": ag.id, "name": ag.name,
+                               "color": ag.color, "kind": kind, "text": text,
+                               "action": action, "arg": arg, "t": time.time()})
+        self.proposals = self.proposals[-6:]
+        self.event(f"{ag.name} put an offer to you: {text}")
+        return f"offered the stranger: {text}"
+
+    def resolve_proposal(self, pid, accept):
+        p = next((x for x in self.proposals if x["id"] == pid), None)
+        if not p:
+            return "That offer is no longer on the table."
+        self.proposals.remove(p)
+        ag = self.agents.get(p["from"])
+        if not ag:
+            return "They are no longer here."
+        if not accept:
+            ag.remember(f"The stranger turned down my offer: {p['text']}", 3, source="stranger")
+            self.adjust_trust(ag, "stranger", -0.1)
+            self.event(f"You turned down {ag.name}: {p['text']}")
+            return f"You turned down {ag.name}."
+        result = self.apply_action(ag, p["action"], "stranger", p["arg"], "", consented=True)
+        ag.remember(f"The stranger accepted: {p['text']}", 3, source="stranger")
+        self.adjust_trust(ag, "stranger", 0.1)
+        self.event(f"You accepted {ag.name}'s offer: {result}")
+        return result
+
+    def expire_proposals(self):
+        now = time.time()
+        for p in list(self.proposals):
+            if now - p["t"] > 90:
+                self.proposals.remove(p)
 
     def party(self, ident):
         """Resolve an action's target to a person — an agent, or the player."""
@@ -334,6 +375,7 @@ class World:
     # ---------- fast tick: movement only, never waits on the LLM ----------
     def step(self, dt):
         self.townsfolk_tick()
+        self.expire_proposals()
         for ag in self.agents.values():
             dx, dy = ag.tx - ag.x, ag.ty - ag.y
             dist = (dx * dx + dy * dy) ** 0.5
@@ -345,7 +387,7 @@ class World:
                 ag.say = ""
 
     # ---------- action validation: the LLM proposes, the world decides ----------
-    def apply_action(self, ag, action, target, arg, say):
+    def apply_action(self, ag, action, target, arg, say, consented=False):
         """Returns a short result string recorded into memories."""
         # models sometimes echo the signature, e.g. 'talk_to(agent, intent)'
         action = (action or "rest").lower().strip().split("(")[0].strip()
@@ -526,6 +568,14 @@ class World:
                         f"(they hold {buyer.cash}c)")
 
             total = qty * unit
+            if not consented and self.you in (buyer, seller):
+                if buyer is self.you:
+                    text = f"{qty} {have} for {unit} coins each — {total} in all"
+                else:
+                    text = f"to buy {qty} {have} off you at {unit} coins each — {total} in all"
+                return self.propose(ag, "trade", text, action,
+                                    f"{have}, {qty}, {unit}")
+
             self.pay(buyer, seller, total, f"{qty}x {have} @ {unit}c")
             if shelf is not None:
                 shelf["qty"] = stockpile - qty
@@ -596,6 +646,8 @@ class World:
                 wage = 6
             if ag.cash < wage:
                 return f"could not afford to take {other.name} on"
+            if other is self.you:
+                return "the stranger works for nobody"
             if other.employer == ag.id and other.wage == wage:
                 return f"already employs {other.name} at {wage} coins a shift"
             if other.id == ag.id:
@@ -622,6 +674,13 @@ class World:
             except (TypeError, ValueError):
                 amount = 20
             owed_already = other.debts.get(ag.id, 0)
+            if not consented and other is self.you:
+                rate = self.interest_rate if ag.id == "bram" else 0.0
+                owed_preview = round(amount * (1 + rate))
+                terms = f" at {int(rate * 100)}% interest" if rate else ""
+                return self.propose(ag, "loan",
+                                    f"a loan of {amount} coins{terms} — {owed_preview} to pay back",
+                                    "lend", str(amount))
 
             if ag.id == "bram":
                 # the bank lends out of its reserves, at the bank's rate
@@ -774,6 +833,8 @@ class World:
             "interest_rate": self.interest_rate,
             "flows": self.flows[-14:],
             "price_mult": round(self.price_mult, 2),
+            "proposals": [{"id": p["id"], "name": p["name"], "color": p["color"],
+                           "kind": p["kind"], "text": p["text"]} for p in self.proposals],
             "conversations": [{
                 "id": c.id, "a": c.a, "b": c.b, "closed": c.closed,
                 "names": [self.party(c.a).name, self.party(c.b).name],

@@ -227,6 +227,13 @@ async def handle(msg):
                 world.event(f"You bought {item['name']} for {price} coins, {item['qty']} left")
                 await broadcast({"type": "open_url", "url": item.get("url", ""), "name": item["name"]})
 
+    elif kind == "offer":
+        try:
+            pid = int(msg.get("id"))
+        except (TypeError, ValueError):
+            return
+        world.resolve_proposal(pid, bool(msg.get("accept")))
+
     elif kind == "event":
         god_event(str(msg.get("name", "")))
 
