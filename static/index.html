@@ -235,6 +235,12 @@
 <script>
 const cv = document.getElementById('game'), ctx = cv.getContext('2d');
 let S = null, keys = {}, player = { x: 17, y: 11 };
+let lastPaint = 0, holding = false;
+// A click needs mousedown and mouseup on the same element, so hold repaints
+// from the moment a press starts until just after it finishes.
+addEventListener('pointerdown', () => { holding = true; }, true);
+addEventListener('pointerup', () => setTimeout(() => { holding = false; }, 150), true);
+addEventListener('pointercancel', () => { holding = false; }, true);
 
 const esc = s => String(s).replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -440,6 +446,15 @@ function render() {
   const bubbles = [];
   for (const c of cast) if (c.say) bubble(c.x * T, c.y * T - T * .62 * 1.55, c.say, T, bubbles);
 
+  // The panels are rebuilt wholesale, which destroys every button in them. At the
+  // frame rate that lands mid-click often enough to swallow the click entirely, so
+  // repaint slowly, never while a pointer is down, and keep the reader's place.
+  const now = performance.now();
+  if (holding || now - lastPaint < 400) return;
+  lastPaint = now;
+  const pane = document.querySelector('.pane.on');
+  const wasAt = pane ? pane.scrollTop : 0;
+
   document.getElementById('coins').textContent = S.player.cash;
   const c = S.clock ?? 0;
   const part = c < .25 ? 'Morning' : c < .5 ? 'Midday' : c < .72 ? 'Afternoon'
@@ -462,6 +477,7 @@ function render() {
   if (!who.options.length)
     who.innerHTML = S.agents.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
   drawCivic(); drawOffers(); drawPeople(); drawMarket(); drawTalk(); drawShop(); drawLedger(); drawNews();
+  if (pane) pane.scrollTop = wasAt;          // a repaint must not throw you back to the top
 }
 
 /* Fixed props, so the empty corners read as the edge of a town rather than dead space. */
