@@ -501,6 +501,10 @@ document.getElementById('bag').addEventListener('click', e => {
   const b = e.target.closest('[data-sell]');
   if (b) send({ type: 'sell', item: b.dataset.sell });
 });
+document.getElementById('people').addEventListener('click', e => {
+  const b = e.target.closest('[data-lend]');
+  if (b) send({ type: 'lend', agent: b.dataset.lend, amount: +b.dataset.amt });
+});
 document.querySelectorAll('[data-ev]').forEach(b =>
   b.onclick = () => send({ type: 'event', name: b.dataset.ev }));
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
@@ -1206,6 +1210,11 @@ function drawPeople() {
           ${a.action === 'slept' ? '<span>asleep</span>' : ''}
           ${a.debt ? `<span class="owing">owes ${a.debt}</span>` : ''}
           ${a.employer ? `<span>hired by ${esc((S.agents.find(x => x.id === a.employer) || {}).name || a.employer)}</span>` : ''}
+          ${a.owes_you ? `<span class="coins">owes you ${a.owes_you}</span>` : ''}
+        </div>
+        <div class="vitals">
+          <button class="btn" data-lend="${esc(a.id)}" data-amt="20">Lend 20</button>
+          <button class="btn" data-lend="${esc(a.id)}" data-amt="50">Lend 50</button>
         </div>
       </div>
     </article>`).join('');

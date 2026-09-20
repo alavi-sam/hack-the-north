@@ -501,17 +501,20 @@ async def handle(msg):
         world.resolve_proposal(pid, bool(msg.get("accept")))
 
     elif kind == "shares":
-        world.event_result = world.player_trade(
+        return world.player_trade(
             str(msg.get("shop", "")), int(msg.get("n", 1) or 1), bool(msg.get("buy")))
 
     elif kind == "source":
-        world.event_result = world.player_source(str(msg.get("item", "")))
+        return world.player_source(str(msg.get("item", "")))
 
     elif kind == "work":
         return world.player_work()
 
     elif kind == "sell":
-        world.event_result = world.player_sell(str(msg.get("item", "")))
+        return world.player_sell(str(msg.get("item", "")))
+
+    elif kind == "lend":
+        return world.player_lend(str(msg.get("agent", "")), msg.get("amount", 20))
 
     elif kind == "vote":
         cid = str(msg.get("agent", ""))

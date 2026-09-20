@@ -479,6 +479,28 @@ class World:
         self.event(f"You took a case of {units} {match['name']} for {bill} coins", "Purchase", bill)
         return f"You bought {units} {match['name']} at {unit} each. Sell them on for more."
 
+    def player_lend(self, target, amount):
+        """Front a resident money out of your own purse, the way a friend would."""
+        other = self.agents.get((target or "").strip().lower())
+        if not other:
+            return "Choose a resident to lend to first."
+        try:
+            amount = max(1, min(80, int(float(amount))))
+        except (TypeError, ValueError):
+            return "Say how many whole coins to lend."
+        if self.you.cash < amount:
+            return f"You only have {self.you.cash} coins."
+        owed_already = other.debts.get(self.you.id, 0)
+        if owed_already + amount > 60:
+            return f"{other.name} already owes you {owed_already} coins."
+        self.pay(self.you, other, amount, "a loan from the stranger")
+        other.debts[self.you.id] = owed_already + amount
+        other.remember(f"The stranger lent me {amount} coins; I owe {amount} back.",
+                       3, source="player")
+        self.adjust_trust(other, self.you.id, 0.1)
+        self.event(f"You lent {other.name} {amount} coins, {owed_already + amount} due back")
+        return f"You lent {other.name} {amount} coins. They owe you {owed_already + amount}."
+
     def player_sell(self, name):
         """Sell something out of your bag to whichever shopkeeper is nearest."""
         you = self.you
@@ -1725,6 +1747,7 @@ class World:
                 "action": a.last_action, "goal": a.goal,
                 "inventory": a.inventory, "trust": a.trust,
                 "debt": sum(a.debts.values()),
+                "owes_you": a.debts.get(self.you.id, 0),
                 "employer": a.employer, "wage": a.wage, "produces": a.produces,
             } for a in self.agents.values()],
             "player": {"x": round(self.you.x, 2), "y": round(self.you.y, 2),
