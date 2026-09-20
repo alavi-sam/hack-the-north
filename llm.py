@@ -23,6 +23,8 @@ async def _once(model: str, system: str, user: str, max_tokens: int) -> str:
                          {"role": "user", "content": user}],
             "max_tokens": max_tokens,
             "temperature": 0.9,
+            # several free models are reasoners; their thinking would eat the whole budget
+            "reasoning": {"enabled": False},
         },
     )
     if r.status_code == 429:
