@@ -79,6 +79,27 @@ def parse_offer(arg, target):
     return name, max(1, min(99, qty)), unit
 
 
+def match_item(names, name):
+    """Models name goods loosely — 'candles' for 'Beeswax Candles'. The shelves already
+    fall back to a loose match; a bag should too, or the sale dies on the name."""
+    name = (name or "").strip().lower()
+    if not name:
+        return None
+    for k in names:
+        if k.lower() == name:
+            return k
+    for k in names:
+        if name in k.lower() or k.lower() in name:
+            return k
+    words = [w for w in name.split() if len(w) > 2]
+    best, score = None, 0
+    for k in names:
+        hit = sum(1 for w in words if w in k.lower())
+        if hit > score:
+            best, score = k, hit
+    return best
+
+
 def nearest_place(x, y):
     return min(PLACES, key=lambda p: (place_center(p)[0] - x) ** 2 + (place_center(p)[1] - y) ** 2)
 
@@ -504,8 +525,7 @@ class World:
     def player_sell(self, name):
         """Sell something out of your bag to whichever shopkeeper is nearest."""
         you = self.you
-        have = next((k for k in you.inventory if k.lower() == (name or "").lower()
-                     and you.inventory[k] > 0), None)
+        have = match_item([k for k in you.inventory if you.inventory[k] > 0], name)
         if not have:
             return f"You have no {name} to sell."
         keepers = [(self.agents[sh.owner], sh) for sh in self.shops if sh.owner in self.agents]
@@ -1278,7 +1298,7 @@ class World:
                     seller.remember(f"I am out of {have} and turned away a sale.", 3)
                     return f"{seller.name} had no {have} left on the shelf"
             else:
-                have = next((k for k in seller.inventory if k.lower() == (name or "").lower()), None)
+                have = match_item([k for k in seller.inventory if seller.inventory[k] > 0], name)
                 stockpile = seller.inventory.get(have, 0) if have else 0
                 if not have or stockpile <= 0:
                     who = "had no" if seller is ag else f"{seller.name} had no"
