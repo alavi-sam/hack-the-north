@@ -15,18 +15,21 @@ _gate = asyncio.Semaphore(int(os.getenv("LLM_CONCURRENCY", "3")))
 
 
 async def _once(model: str, system: str, user: str, max_tokens: int) -> str:
+    body = {
+        "model": model,
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": user}],
+        "max_tokens": max_tokens,
+        "temperature": 0.9,
+    }
+    # several free models are reasoners; their thinking would eat the whole budget.
+    # OpenAI rejects the param outright, so only send it to OpenRouter.
+    if "openrouter" in BASE_URL:
+        body["reasoning"] = {"enabled": False}
     r = await _client.post(
         f"{BASE_URL}/chat/completions",
         headers={"Authorization": f"Bearer {API_KEY}"},
-        json={
-            "model": model,
-            "messages": [{"role": "system", "content": system},
-                         {"role": "user", "content": user}],
-            "max_tokens": max_tokens,
-            "temperature": 0.9,
-            # several free models are reasoners; their thinking would eat the whole budget
-            "reasoning": {"enabled": False},
-        },
+        json=body,
     )
     if r.status_code == 429:
         raise RuntimeError("rate-limited")
