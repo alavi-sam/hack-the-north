@@ -21,6 +21,23 @@ agent_tasks = {}
 chat_tasks = set()
 
 
+def reset_town():
+    global world
+    old = world
+    for task in [*agent_tasks.values(), *chat_tasks]:
+        if not task.done():
+            task.cancel()
+    agent_tasks.clear()
+    chat_tasks.clear()
+    # Reuse the starting catalogue; resetting never waits on another network fetch.
+    world = World(stock=old.initial_stock)
+    world.paused = old.paused
+    world.paused_at = time.monotonic() if world.paused else 0
+    llm.paused = world.paused
+    for i, ag in enumerate(world.agents.values()):
+        ag.next_tick = clock.time() + 1.5 + i * (SLOW_SECONDS / len(world.agents))
+
+
 def set_paused(paused):
     if paused == world.paused:
         return
@@ -242,10 +259,24 @@ use sell_to, buy, lend, repay or hire. Talk alone moves no coins.
 """
 
     economy += ladder
-    if world.market_open():
-        board = "; ".join(f"{m['name']} at {m['price']}" for m in world.market_board()[:3])
-        economy += (f" Shares trade on the exchange: {board}. `buy_shares` into a business you "
-                    f"believe in, `sell_shares` to get out. Talk moves prices.")
+    if world.shops:
+        board = "\n".join(
+            f"- {s.name}: target={s.owner}, price={world.quote(s)}c, book value={world.fair_value(s):.1f}c, "
+            f"available={world.float_of(s)}, you own={s.holders.get(ag.id, 0)}, "
+            f"sentiment={s.sentiment:+.2f}, owner's trust={ag.trust.get(s.owner, 0):+.2f}"
+            for s in world.shops)
+        economy += f"""\nSTOCK EXCHANGE (use your own cash, never bank reserves or another person's money):
+{board}
+Exchange cash available to buy shares back: {world.exchange['cash']}c.
+You can buy_shares or sell_shares: target = listed owner's id, arg = quantity, e.g. "1".
+Only buy shares on offer that you can afford. Only sell shares you actually own.
+Shares pay dividends from business takings. Prices and rumours affect their value; losses are possible.
+Keep cash for your debts, food, payroll and stock. Judge investments through your personality:
+cautious savers protect reserves, opportunists speculate, loyal supporters may back trusted owners.
+Selling is possible even when no shares remain on offer. Never invent another listed company.
+"""
+        if ag.decisions % 4 == 3 and not ag.event_reaction:
+            event_context += "PORTFOLIO REVIEW: This turn, consider buying or selling 1–3 shares based on the board and your goals. Trade when there is a sensible opportunity; otherwise explain why you keep your cash or holdings and choose another action.\n"
     if world.offers:
         pitch = ", ".join(f"{o['name']} at {max(1, round(o['price'] * 0.6))} each"
                           for o in world.offers[:3])
@@ -280,6 +311,7 @@ async def agent_tick(ag):
 
 
 async def _agent_tick(ag):
+    turn_world = world
     if world.paused:
         return
     pause_revision = world.pause_revision
@@ -292,11 +324,13 @@ async def _agent_tick(ag):
         return
 
     event_id = world.manual_event_id
-    text = await llm.chat(SYSTEM, f"Resident ids: {', '.join(world.agents)}.\n" + build_prompt(ag), max_tokens=300)
-    if world.paused or pause_revision != world.pause_revision or event_id != world.manual_event_id:
-        return  # A late result must never overwrite a newer event reaction.
+    data = world.stock_decision(ag) if ag.decisions % 4 == 3 and not ag.event_reaction else None
+    if data is None:
+        text = await llm.chat(SYSTEM, f"Resident ids: {', '.join(world.agents)}.\n" + build_prompt(ag), max_tokens=300)
+        if world is not turn_world or world.paused or pause_revision != world.pause_revision or event_id != world.manual_event_id:
+            return  # A late result must never overwrite a newer event reaction.
+        data = llm.extract_json(text)
     reaction = ag.event_reaction
-    data = llm.extract_json(text)
     if not isinstance(data, dict) or (reaction and not str(data.get("say") or "").strip()):
         data = reaction_decision(ag) if reaction else world.fallback_decision(ag)
     if reaction:
@@ -326,6 +360,7 @@ async def _agent_tick(ag):
         ag.thought = data["thought"]
         result = world.apply_action(ag, data["action"], data["target"], data["arg"], data["say"])
     ag.last_action = result
+    ag.decisions += 1
     ag.remember(f"I {result}.", 1)
     if reaction:
         say = str(data.get("say") or "")[:120]
@@ -396,9 +431,12 @@ async def supplier_loop():
             query = world.wanted.pop(0) if world.wanted else RESTOCK_IDEAS[idea % len(RESTOCK_IDEAS)]
             idea += 1
             try:
+                request_world = world
                 found = await asyncio.to_thread(catalog.search, query, 15000, 2)
-                while world.paused:
+                while world is request_world and world.paused:
                     await asyncio.sleep(.25)
+                if world is not request_world:
+                    continue
                 have = {o["name"] for o in world.offers} | {g["name"] for _, g in world.all_goods()}
                 world.offers.extend(o for o in found if o["name"] not in have)
             except Exception as e:
@@ -431,6 +469,11 @@ async def ws_endpoint(ws: WebSocket):
 # ---------- player actions ----------
 async def handle(msg):
     kind = msg.get("type")
+
+    if kind == "reset":
+        reset_town()
+        await broadcast(world.snapshot())
+        return "Town reset to day 1." + (" Still paused; Resume when ready." if world.paused else "")
 
     if kind == "pause":
         if type(msg.get("paused")) is not bool:
@@ -530,6 +573,7 @@ async def handle(msg):
 
 
 async def player_chat(ag, text):
+    turn_world = world
     if world.paused:
         return
     pause_revision = world.pause_revision
@@ -549,7 +593,7 @@ You have {ag.cash} coins. Stay fully in character. Reply with ONE or TWO short s
         system,
         f"What you remember:\n{mems}\n{history}\nThe stranger says: \"{text}\"\nYour reply:",
         max_tokens=120)
-    if world.paused or pause_revision != world.pause_revision:
+    if world is not turn_world or world.paused or pause_revision != world.pause_revision:
         return
     reply = (reply or "...").strip().strip('"')[:200]
     ag.speak(reply, 9)

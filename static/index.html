@@ -55,6 +55,7 @@
   .btn[disabled]:hover { border-color: var(--wood-line); color: var(--paper); }
   .stir { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .stir span { color: var(--paper-dim); font-size: 12px; }
+  #reset { margin-left: auto; }
 
   #link { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); z-index: 3;
           background: var(--rust); color: #fff4ec; padding: 8px 14px; border-radius: 4px;
@@ -268,6 +269,7 @@
         <button class="btn" id="end-speedup" hidden>End fast-forward &amp; recap</button>
         <span id="speed-status" role="status"></span>
       </div>
+      <button class="btn" id="reset" title="Start a fresh town for everyone">Reset town</button>
     </div>
   </div>
 
@@ -312,7 +314,7 @@ function showAction(text) {
   el.hidden = false;
 }
 function send(o) {
-  if (S?.paused && o.type !== 'pause') {
+  if (S?.paused && !['pause', 'reset'].includes(o.type)) {
     if (o.type !== 'move') showAction('The town is paused. Resume to take an action.');
     return false;
   }
@@ -337,6 +339,18 @@ function connect() {
   ws.onmessage = e => {
     const m = JSON.parse(e.data);
     if (m.type === 'state') {
+      if (S && S.town_id !== m.town_id) {
+        visuals.clear(); keys = {}; talkWith = 'all';
+        player = { x: m.player.x, y: m.player.y };
+        clearTimeout(festivalTimer);
+        festival = null; festivalSeen = 0; recapId = null;
+        document.getElementById('festival-banner').hidden = true;
+        document.getElementById('recap').hidden = true;
+        document.getElementById('line').value = '';
+        who.dataset.roster = ''; who.value = '';
+        backdropKey = ''; lastPaint = -Infinity;
+        showAction('Town reset to day 1.' + (m.paused ? ' Still paused.' : ''));
+      }
       const pauseChanged = !!S?.paused !== !!m.paused;
       if (pauseChanged || !S) {
         pausedFrame = performance.now();
@@ -366,6 +380,10 @@ connect();
 let recapId = null;
 let pausedFrame = 0;
 document.getElementById('pause').onclick = () => send({ type: 'pause', paused: !S?.paused });
+document.getElementById('reset').onclick = () => {
+  if (confirm('Reset the shared town for everyone? This clears progress, conversations, purchases and share holdings.'))
+    send({ type: 'reset' });
+};
 
 function renderPause() {
   const paused = !!S.paused;
@@ -373,7 +391,7 @@ function renderPause() {
   button.textContent = paused ? 'Resume' : 'Pause';
   button.setAttribute('aria-pressed', String(paused));
   document.getElementById('pause-status').textContent = paused ? 'Paused · agent prompts stopped' : '';
-  document.querySelectorAll('#bottom button:not(#pause), #time-speed').forEach(el => {
+  document.querySelectorAll('#bottom button:not(#pause):not(#reset), #time-speed').forEach(el => {
     el.disabled = paused || (el.id === 'work' && !!S.player.shift);
   });
 }

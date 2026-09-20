@@ -38,10 +38,15 @@ Use **Time** in the bottom toolbar to run the town at **5×, 10×, or 20×**.
 Use **Pause** at the bottom left to freeze the shared town and stop agent and player-chat
 prompts. Pending requests are cancelled; tokens already processed upstream may still be billed.
 **Resume** continues at the previous speed, without advancing through the paused time.
+**Reset town**, at the bottom right of the toolbar, asks for confirmation and starts everyone over at day 1.
+It clears shared progress, trades, conversations, and visitors, and stays paused if already paused.
+Residents can buy and sell business shares with their own coins. Every fourth waking turn,
+they review small trades based on risk appetite, trust, value, and cash needed for obligations.
+These automatic trades require no model call; residents can also choose trades on ordinary turns.
 Choose **Normal** or **End fast-forward & recap** to return to 1× and open the
 collapsible recap at the bottom right of the town. It covers that fast-forward period:
 completed purchases of 20+ coins, election results, new businesses, dividends, stock
-offerings, major town events, and start-to-finish share-price changes, when they occur.
+offerings and trades, major town events, and start-to-finish share-price changes, when they occur.
 The recap uses recorded simulation data and requires no AI call. Time controls apply
 to the shared town for all connected players. Faster time can make more agent API calls;
 each agent has at most one decision in flight, with the existing concurrency limit.

@@ -1,5 +1,5 @@
 """Untitled Town: world state, agents, economy. The server is the single source of truth."""
-import math, os, random, time, json
+import math, os, random, time, json, copy, uuid
 from dataclasses import dataclass, field
 
 import catalog
@@ -194,6 +194,7 @@ class Agent:
     politician: bool = False
     promise: str = ""       # the policy they are running on
     event_reaction: dict | None = None
+    decisions: int = 0
 
     def remember(self, text, importance=1, source="self"):
         self.memories.append(Memory(text, clock.time(), importance, source))
@@ -285,8 +286,8 @@ restock(query)                 — shop owners; buy stock from the outside suppl
 source(query)                  — ANYONE with coin: buy a case of 3 real goods from the supplier
                                  into your own bag, then sell them on at a markup
 issue_shares(n)                — shop owners: float n of your own shares to raise coin now
-buy_shares(shop, n)            — buy into someone's business (arg = "<shop or owner>, <n>")
-sell_shares(shop, n)           — sell shares you hold back to the exchange
+buy_shares(shop, n)            — buy shares: target = shop owner's id, arg = positive whole-number quantity
+sell_shares(shop, n)           — sell shares you hold: target = shop owner's id, arg = positive whole-number quantity
 open_stall(name)               — if you have no shop and 55 coins, take a market plot and trade
                                  for yourself instead of for wages
 hire(agent, wage)              — offer someone a job you pay for (arg = wage)
@@ -296,9 +297,11 @@ repay(agent, amount)           — pay down what you owe that person"""
 
 
 class World:
-    def __init__(self):
+    def __init__(self, stock=None):
+        self.town_id = uuid.uuid4().hex
         self.agents = make_agents()
-        goods = catalog.load_stock()
+        goods = copy.deepcopy(stock) if stock is not None else catalog.load_stock()
+        self.initial_stock = copy.deepcopy(goods)
         for name, price in (("Bread", 4), ("Apples", 3)):
             goods.append({"name": name, "real_title": f"Local {name}",
                           "price": price, "url": "", "image": ""})
@@ -624,7 +627,7 @@ class World:
             self.exchange["shares"][sh.owner] = avail - n
             sh.holders[who.id] = sh.holders.get(who.id, 0) + n
             sh.share_price *= 1 + 0.02 * n
-            self.event(f"{who.name} bought {n} shares in {sh.name} at {price} ({cost} in all)")
+            self.event(f"{who.name} bought {n} shares in {sh.name} at {price} ({cost} in all)", "Stock trade")
             return True, f"bought {n} shares in {sh.name} at {price} each, {cost} in all"
 
         held = sh.holders.get(who.id, 0)
@@ -640,11 +643,42 @@ class World:
         self.exchange["shares"][sh.owner] = self.float_of(sh) + n
         sh.share_price *= 1 - 0.02 * n
         sh.share_price = max(1.0, sh.share_price)
-        self.event(f"{who.name} sold {n} shares in {sh.name} at {price} ({proceeds} in all)")
+        self.event(f"{who.name} sold {n} shares in {sh.name} at {price} ({proceeds} in all)", "Stock trade")
         return True, f"sold {n} shares in {sh.name} at {price} each, {proceeds} in all"
 
     def market_open(self):
         return any(self.float_of(sh) > 0 for sh in self.shops)
+
+    def stock_decision(self, ag):
+        """Occasional portfolio management using each resident's risk appetite and own purse."""
+        risk = {"bram": .2, "mira": .25, "wren": .08, "fig": .15,
+                "kit": .6, "orla": .35, "devi": .12, "rowan": .5}.get(ag.id, .2)
+        reserve = max(12, sum(ag.debts.values()) * .6)
+        if self.shop_of(ag.id):
+            reserve += sum(a.wage * 2 for a in self.agents.values() if a.employer == ag.id) + 15
+        wealth = ag.cash + sum(s.holders.get(ag.id, 0) * self.quote(s) for s in self.shops)
+        invested = sum(s.holders.get(ag.id, 0) * self.quote(s) for s in self.shops if s.owner != ag.id)
+        budget = max(0, min(ag.cash - reserve, wealth * risk - invested))
+        for sh in sorted(self.shops, key=lambda s: self.quote(s) / self.fair_value(s)):
+            price, held = self.quote(sh), sh.holders.get(ag.id, 0)
+            trust = ag.trust.get(sh.owner, 0)
+            reason = None
+            if held and ag.cash < reserve:
+                reason = "I need cash for my obligations."
+            elif held and sh.owner != ag.id and (trust < -.25 or price > self.fair_value(sh) * (1.25 + risk)):
+                reason = "I'd rather protect my coins than keep this stake."
+            if reason and self.exchange['cash'] >= price:
+                n = min(3, held, self.exchange['cash'] // price)
+                return {"action": "sell_shares", "target": sh.owner, "arg": str(n),
+                        "thought": reason, "say": f"I'm selling {n} shares in {sh.name}. {reason}"}
+            value = self.fair_value(sh) * (1 + trust * .2 + sh.sentiment * .15)
+            if sh.owner != ag.id and trust >= -.2 and price <= value * (1 + risk * .15):
+                n = min(3, self.float_of(sh), int(budget // price))
+                if n > 0:
+                    return {"action": "buy_shares", "target": sh.owner, "arg": str(n),
+                            "thought": f"A {n}-share stake fits my budget; I can still cover my obligations.",
+                            "say": f"I'll back {sh.name} with {n} shares. Let's see what they earn."}
+        return None
 
     def market_board(self):
         return [{"name": sh.name, "price": self.quote(sh)} for sh in self.shops
@@ -1606,26 +1640,18 @@ class World:
             return (f"floated {n} shares of {shop.name} at {price} each and raised {raised} coins. "
                     f"You still hold {shop.holders[ag.id]} of {SHARES}.")
 
-        if action in ("buy_shares", "invest"):
-            shop = self.shop_named(target or arg)
+        if action in ("buy_shares", "invest", "sell_shares", "divest"):
+            parts = [p.strip() for p in str(arg).split(",")]
+            shop = self.shop_named(target or (parts[0] if len(parts) > 1 else ""))
             if shop is None:
                 return f"could not find a business called '{target or arg}'"
             try:
-                n = int(float([x for x in str(arg).replace(",", " ").split() if x.isdigit()][0]))
-            except (IndexError, ValueError):
-                n = 3
-            ok, msg = self.trade_shares(ag, shop, n, buying=True)
-            return msg
-
-        if action in ("sell_shares", "divest"):
-            shop = self.shop_named(target or arg)
-            if shop is None:
-                return f"could not find a business called '{target or arg}'"
-            try:
-                n = int(float([x for x in str(arg).replace(",", " ").split() if x.isdigit()][0]))
-            except (IndexError, ValueError):
-                n = 3
-            ok, msg = self.trade_shares(ag, shop, n, buying=False)
+                n = int(parts[-1] or "1")
+            except ValueError:
+                return "could not trade shares: quantity must be a positive whole number"
+            if n <= 0:
+                return "could not trade shares: quantity must be a positive whole number"
+            ok, msg = self.trade_shares(ag, shop, n, buying=action in ("buy_shares", "invest"))
             return msg
 
         if action in ("source", "order", "import"):
@@ -1750,6 +1776,7 @@ class World:
     def snapshot(self):
         return {
             "type": "state",
+            "town_id": self.town_id,
             "speed": self.speed,
             "paused": self.paused,
             "speedup_summary": self.speedup_summary,
