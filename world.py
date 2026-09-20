@@ -7,6 +7,7 @@ from simulation_clock import clock
 
 TILE = 24
 MAP_W, MAP_H = 34, 20
+PERSONAL_SPACE = 1.0     # nobody stands inside anybody else
 
 # name -> (tile x, tile y, w, h, colour) — the buildings agents walk between
 PLACES = {
@@ -1051,6 +1052,26 @@ class World:
                     ag.ty = cy + random.uniform(-1.1, 1.1)
             if ag.say and clock.time() > ag.say_until:
                 ag.say = ""
+        self.keep_apart()
+
+    def keep_apart(self):
+        """Two residents on one tile read as one resident. Push any overlap apart."""
+        crowd = list(self.agents.values())
+        for i, a in enumerate(crowd):
+            for b in crowd[i + 1:]:
+                dx, dy = b.x - a.x, b.y - a.y
+                gap = (dx * dx + dy * dy) ** 0.5
+                if gap >= PERSONAL_SPACE:
+                    continue
+                if gap < 1e-6:            # exactly stacked: break the tie in any direction
+                    ang = random.uniform(0, 6.283)
+                    dx, dy, gap = math.cos(ang), math.sin(ang), 1.0
+                shove = (PERSONAL_SPACE - gap) / 2
+                ux, uy = dx / gap, dy / gap
+                a.x = min(MAP_W - 1, max(1, a.x - ux * shove))
+                a.y = min(MAP_H - 1, max(1, a.y - uy * shove))
+                b.x = min(MAP_W - 1, max(1, b.x + ux * shove))
+                b.y = min(MAP_H - 1, max(1, b.y + uy * shove))
 
     def send_to(self, ag, place):
         """Actions happen at places. Give the agent a reason to stand somewhere."""
