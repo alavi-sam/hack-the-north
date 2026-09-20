@@ -1043,6 +1043,23 @@ class World:
             if ag.say and clock.time() > ag.say_until:
                 ag.say = ""
 
+    def send_to(self, ag, place):
+        """Actions happen at places. Give the agent a reason to stand somewhere."""
+        if place in PLACES:
+            cx, cy = place_center(place)
+            ag.tx = cx + random.uniform(-1.2, 1.2)
+            ag.ty = cy + random.uniform(-0.8, 0.8)
+
+    def workplace(self, ag):
+        """Where this resident's job puts them."""
+        if ag.produces:
+            return "farm"
+        mine = self.shop_of(ag.id)
+        if mine:
+            return mine.place
+        boss_shop = self.shop_of(ag.employer) if ag.employer else None
+        return boss_shop.place if boss_shop else "square"
+
     # ---------- action validation: the LLM proposes, the world decides ----------
     def apply_action(self, ag, action, target, arg, say, consented=False):
         """Returns a short result string recorded into memories."""
@@ -1064,6 +1081,7 @@ class World:
             if ag.energy < 15:
                 return "was too tired to work"
             ag.energy -= 15
+            self.send_to(ag, self.workplace(ag))
 
             # a producer turns effort into goods, not coin — they earn by selling
             if ag.produces:
@@ -1088,6 +1106,7 @@ class World:
 
         if action == "rest":
             ag.energy = min(100, ag.energy + 25)
+            self.send_to(ag, ag.home)
             return "rested"
 
         other = self.party(target)
@@ -1112,7 +1131,9 @@ class World:
                 return f"waited for {other.name} to answer"
 
             self.say_into(ag, other, line)
-            ag.tx, ag.ty = other.x + 1, other.y
+            # stand beside them, but never right on top of them
+            if (ag.x - other.x) ** 2 + (ag.y - other.y) ** 2 > 2.25:
+                ag.tx, ag.ty = other.x + 1, other.y
             other.remember(f"{ag.name} said: {line}", 2, source=ag.id)
             self.adjust_trust(other, ag.id, 0.05)
 
@@ -1280,6 +1301,9 @@ class World:
                     f"at {unit} coins each, {total} coins in total{shortfall}")
 
         if action == "set_price":
+            mine_here = self.shop_of(ag.id)
+            if mine_here:
+                self.send_to(ag, mine_here.place)
             shop = self.shop_of(ag.id)
             if shop is None:
                 return "keeps no shop, so sets no prices"
@@ -1424,6 +1448,9 @@ class World:
             return f"repaid {creditor.name} {pay} coins, {left} still owing"
 
         if action == "restock":
+            mine_here = self.shop_of(ag.id)
+            if mine_here:
+                self.send_to(ag, mine_here.place)
             shop = self.shop_of(ag.id)
             if shop is None:
                 return "keeps no shop to restock"

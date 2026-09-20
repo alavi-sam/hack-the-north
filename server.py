@@ -113,6 +113,9 @@ Reply with ONLY a JSON object, no prose, no markdown fence:
 {"thought": "one short private thought", "action": "<one action>", "target": "<agent id or place or item>", "arg": "<extra, may be empty>", "say": "<one short line spoken aloud, may be empty>"}
 Valid actions: """ + ACTIONS + """
 Places: shop, bank, farm, tavern, square. Use the resident ids listed in the prompt.
+The town is a real map and you are standing somewhere on it. A resident who never leaves one spot
+is a dull one: when your goal lies elsewhere — trade in the square, coin at the bank, drink at the
+tavern, work at the farm — use move_to and go there. Do not linger where you already are.
 Pursue your goal. Be specific and a little dramatic. Never invent coins or items you do not have.
 Coins are WHOLE numbers — never 1.75. When you trade, name a QUANTITY and a price PER UNIT,
 and put them in arg as "item, quantity, price" (e.g. "Apples, 50, 2" = fifty apples at 2c each).
