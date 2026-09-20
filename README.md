@@ -297,7 +297,7 @@ The Merchant's stock is pulled from the **Shopify Global Catalog MCP** (`https:/
 
 ---
 
-## 10. Risks and mitigations
+## 9. Risks and mitigations
 
 | Risk | Mitigation |
 |---|---|
