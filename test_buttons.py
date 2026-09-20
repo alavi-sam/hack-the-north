@@ -71,7 +71,9 @@ class ButtonTests(unittest.IsolatedAsyncioTestCase):
         for a in [*w.agents.values(), w.you]:
             self.assertEqual(a.cash, before[a.id] + 15)
             self.assertEqual(a.energy, 100)
-        self.assertTrue(all((a.tx, a.ty) == (17, 10) for a in w.agents.values()))
+        positions = {(a.tx, a.ty) for a in w.agents.values()}
+        self.assertEqual(len(positions), len(w.agents))
+        self.assertTrue(all(14 < x < 20 and 8 < y < 12 for x, y in positions))
 
     async def test_stranger_is_a_real_agent_and_election_opens(self):
         w = self.world

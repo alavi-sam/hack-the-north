@@ -171,6 +171,7 @@ class Agent:
     produces: str = ""      # a producer makes this good instead of earning a wage
     politician: bool = False
     promise: str = ""       # the policy they are running on
+    event_reaction: dict | None = None
 
     def remember(self, text, importance=1, source="self"):
         self.memories.append(Memory(text, clock.time(), importance, source))
@@ -304,6 +305,7 @@ class World:
         self.speedup_summary = None
         self.festival_id = 0
         self.festival_until = 0
+        self.manual_event_id = 0
         self.summary_seq = 0
         self.conversations = []
         self.convo_seq = 0

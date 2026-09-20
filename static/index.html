@@ -582,7 +582,43 @@ function drawFestival(now, T) {
     ctx.fillRect(-3, -2, 6, 3 + Math.abs(Math.sin(age * 3 + i)) * 4);
     ctx.restore();
   }
+  drawFireworks(age, T, fade);
   ctx.restore();
+}
+function drawFireworks(age, T, fade) {
+  // Five staggered rockets; each burst has a fixed number of sparks.
+  for (let burst = 0; burst < 5; burst++) {
+    const elapsed = age - (.4 + burst * 1.35);
+    if (elapsed < 0 || elapsed > 2.2) continue;
+    const x = cv.width * [.19, .8, .34, .67, .48][burst];
+    const y = Math.max(110, cv.height * [.2, .24, .3, .17, .25][burst]);
+    ctx.lineCap = 'round';
+    if (elapsed < .6) {
+      const rise = 1 - (1 - elapsed / .6) ** 2;
+      const rocketY = y + (1 - rise) * T * 5;
+      ctx.globalAlpha = fade;
+      ctx.strokeStyle = '#ffe8a3'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x, rocketY + 16); ctx.lineTo(x, rocketY); ctx.stroke();
+      continue;
+    }
+    const t = elapsed - .6;
+    ctx.globalAlpha = fade * Math.max(0, 1 - t / 1.6);
+    const radius = T * 4 * (1 - Math.exp(-t * 2.4));
+    const tailRadius = T * 4 * (1 - Math.exp(-Math.max(0, t - .07) * 2.4));
+    for (let spark = 0; spark < 32; spark++) {
+      const angle = spark * Math.PI * 2 / 32 + burst * .4;
+      const spread = spark % 2 ? 1 : .72;
+      const sx = x + Math.cos(angle) * radius * spread;
+      const sy = y + Math.sin(angle) * radius * spread + t * t * T * .6;
+      ctx.strokeStyle = festivalColors[(burst + spark % 3) % festivalColors.length];
+      ctx.lineWidth = Math.max(1.5, T * .07);
+      ctx.beginPath();
+      ctx.moveTo(x + Math.cos(angle) * tailRadius * spread,
+                 y + Math.sin(angle) * tailRadius * spread + Math.max(0, t - .07) ** 2 * T * .6);
+      ctx.lineTo(sx, sy); ctx.stroke();
+      ctx.fillStyle = '#fff3ca'; ctx.fillRect(sx - 1, sy - 1, 2, 2);
+    }
+  }
 }
 reducedMotion.addEventListener('change', () => scheduleRender());
 new ResizeObserver(() => scheduleRender()).observe(cv);
@@ -652,7 +688,7 @@ function render(now, dt) {
   const cast = [...S.agents.map(a => visualAgent(a, dt)),
                 { x: player.x, y: player.y, color: '#e8e2d4', name: 'You', say: '', you: true }];
   cast.sort((p, q) => p.y - q.y);                      // nearer characters drawn in front
-  for (const c of cast) sprite(c, T);
+  for (const c of cast) sprite(c, T, now);
   const taken = [];
   for (const c of cast) nameplate(c, T, taken);
   const bubbles = [];
@@ -956,19 +992,38 @@ function building(name, [x, y, w, h], T) {
   ctx.fillStyle = '#3a2d1c'; ctx.fillText(label, px + pw / 2, by + bh * .73);
 }
 
-function sprite({ x, y, color, id, you }, T) {
+function sprite({ x, y, color, id, you }, T, now) {
   const px = x * T, py = y * T, u = T * 0.62;        // u = one "pixel" of the character
   ctx.fillStyle = 'rgba(0,0,0,.24)';
   ctx.beginPath(); ctx.ellipse(px, py + u * 1.15, u * .8, u * .26, 0, 0, 7); ctx.fill();
 
+  const age = festival ? (now - festival.started) / 1000 : 0;
+  const dance = festival && !reducedMotion.matches
+    ? Math.max(0, Math.min(1, (age - 1) * 2, (7.5 - age) * 2)) : 0;
+  const phase = age * Math.PI * 3 + (id || 'you').charCodeAt(0) * .3;
+  const step = Math.sin(phase) * dance;
+  ctx.save();
+  if (dance) {
+    // Dance around the feet without changing the simulation's position or nameplate.
+    const footY = py + u * 1.15;
+    ctx.translate(px + step * u * .14, footY - Math.abs(Math.sin(phase)) * u * .16 * dance);
+    ctx.rotate(step * .1);
+    ctx.translate(-px, -footY);
+  }
+
   ctx.fillStyle = color;                              // body
   ctx.fillRect(px - u * .62, py - u * .1, u * 1.24, u * 1.25);
   ctx.fillStyle = 'rgba(0,0,0,.16)';                  // legs
-  ctx.fillRect(px - u * .46, py + u * .8, u * .34, u * .35);
-  ctx.fillRect(px + u * .12, py + u * .8, u * .34, u * .35);
+  ctx.fillRect(px - u * .46, py + u * (.8 - Math.max(0, step) * .15), u * .34, u * .35);
+  ctx.fillRect(px + u * .12, py + u * (.8 - Math.max(0, -step) * .15), u * .34, u * .35);
   ctx.fillStyle = color;                              // arms
-  ctx.fillRect(px - u * .84, py + u * .05, u * .22, u * .7);
-  ctx.fillRect(px + u * .62, py + u * .05, u * .22, u * .7);
+  for (const side of [-1, 1]) {
+    ctx.save();
+    ctx.translate(px + side * u * .62, py + u * .05);
+    ctx.rotate(-side * dance * (1.6 + Math.sin(phase + side) * .55));
+    ctx.fillRect(side < 0 ? -u * .22 : 0, 0, u * .22, u * .7);
+    ctx.restore();
+  }
 
   ctx.fillStyle = '#e3bd95';                          // head
   ctx.fillRect(px - u * .52, py - u * 1.2, u * 1.04, u * 1.1);
@@ -995,7 +1050,7 @@ function sprite({ x, y, color, id, you }, T) {
     ctx.strokeStyle = '#fff8e8'; ctx.lineWidth = Math.max(1.5, u * .1);
     ctx.strokeRect(px - u * .62, py - u * 1.24, u * 1.24, u * 2.4);
   }
-
+  ctx.restore();
 }
 
 /* Characters bunch up in the square, so a nameplate steps down until it has clear air. */
