@@ -304,6 +304,7 @@ class World:
         self.paused = False
         self.pause_revision = 0
         self.paused_at = 0
+        self.next_wander = {}                   # agent id -> when they may next shift their feet
         self.speedup = None
         self.speedup_summary = None
         self.festival_id = 0
@@ -1040,6 +1041,14 @@ class World:
                 speed = 1.8 * dt
                 ag.x += dx / dist * min(speed, dist)
                 ag.y += dy / dist * min(speed, dist)
+            elif not self.asleep(ag) and time.monotonic() >= self.festival_until:
+                # A decision comes only every few seconds. Between them, residents
+                # mill about where they are instead of standing like furniture.
+                if clock.time() >= self.next_wander.get(ag.id, 0):
+                    self.next_wander[ag.id] = clock.time() + random.uniform(2.5, 6.0)
+                    cx, cy = place_center(nearest_place(ag.x, ag.y))
+                    ag.tx = cx + random.uniform(-1.8, 1.8)
+                    ag.ty = cy + random.uniform(-1.1, 1.1)
             if ag.say and clock.time() > ag.say_until:
                 ag.say = ""
 
