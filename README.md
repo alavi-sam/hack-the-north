@@ -297,45 +297,6 @@ The Merchant's stock is pulled from the **Shopify Global Catalog MCP** (`https:/
 
 ---
 
-## 9. Build plan (4 people)
-
-| Person | Owns |
-|---|---|
-| **A — Game/frontend** | Phaser scene, tilemap, sprites, movement, speech bubbles, chat UI, side panels |
-| **B — Agent brain** | Prompts, memory store + retrieval, slow-tick loop, structured action parsing, conversations, reflection |
-| **C — World/economy** | Ledger, action validation, prices, bank/loans, gossip-trust math, god-panel events |
-| **D — Shopify + glue + demo** | Global Catalog fetch/cache, shop UI, buy flow, WebSocket protocol, Devpost, demo script |
-
-### Timeline (code must be written after 12:00 AM Sat; Devpost due 2:00 PM Sat)
-
-**Phase 1 — Skeleton (midnight to ~4 AM)**
-- Server holds world state, pushes it over WebSocket.
-- Client renders map + 3 walking sprites from server state.
-- One agent makes one LLM decision and the action executes.
-
-**Phase 2 — Core loop (~4 AM to ~10 AM)**
-- All 5 agents on staggered slow ticks with validated actions.
-- Talk / buy / lend / work working end to end.
-- Global Catalog items appear in the shop.
-- Thought panel visible.
-
-**Phase 3 — Submit (~10 AM to 2 PM)**
-- Ugly but working end to end. **Submit on Devpost with the Shopify prize selected.** Screen-record a backup demo video now.
-
-**Phase 4 — Depth (afternoon/evening Sat)**
-- Memory retrieval + reflection, gossip/trust, relationship graph, whisper mechanic.
-- Agent-triggered live catalog search, god panel, economy chart.
-
-**Phase 5 — Polish + rehearse (night into Sun 8 AM)**
-- Art pass, sound optional, tune agent personalities so drama actually happens.
-- Rehearse the 5-minute demo 3+ times; record a fallback video; freeze code.
-
-### Cut list (drop in this order if behind)
-1. Economy chart 2. Reflection 3. Live agent catalog search (keep cached stock) 4. Relationship graph (keep thought panel) 5. Two of the five agents.
-**Never cut:** agents visibly talking to each other, the thought panel, the real Shopify item purchase.
-
----
-
 ## 10. Risks and mitigations
 
 | Risk | Mitigation |
@@ -348,26 +309,3 @@ The Merchant's stock is pulled from the **Shopify Global Catalog MCP** (`https:/
 | Demo fails live | Pre-recorded fallback video, seeded scenario that reliably produces drama, god-panel to force events |
 | Wi-Fi / catalog down | Cache catalog results to a JSON file at startup and fall back to it |
 | Scope creep | Follow the cut list; MVP is 3 agents before adding 2 more |
-
----
-
-## 11. Demo script (5 minutes, live)
-
-1. **(0:00)** Open on the town already running. "Nothing is scripted. Every resident is an AI agent with its own goals and memory."
-2. **(0:30)** Point at the Minds panel: Kit's thought reads "Wren owes Bram — I can use that." Show it change.
-3. **(1:00)** Whisper a rumor to Kit ("Mira waters down her milk"). Open the relationship graph.
-4. **(1:45)** Watch the rumor travel; Kit tells Fig, Fig confronts Mira. Trust edges shift on the graph.
-5. **(2:30)** Walk to the shop, show real products from Shopify's Global Catalog. Buy one; the real product page opens.
-6. **(3:15)** Ask Bram for a loan; he decides based on how he feels about you (and says why).
-7. **(4:00)** Hit *market crash* on the god panel; prices and moods react.
-8. **(4:30)** Close: "Real commerce data, a memory and trust system, and every decision you saw was an LLM reasoning over world state."
-
----
-
-## 12. Next steps (before midnight)
-
-- [ ] Agree on the 5 characters (or swap in your own — keep the conflicts).
-- [ ] Pick and download a tileset + character sprites.
-- [ ] Get an Anthropic API key working on everyone's machine; confirm Python 3.10+.
-- [ ] Decide who owns which of the four roles.
-- [ ] Planning and public assets are allowed beforehand; **no project code until midnight.**
