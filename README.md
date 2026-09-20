@@ -1,7 +1,8 @@
 # Agent Town
 
 A 2D pixel town where every resident is an AI agent with a personality, goals, memories, and relationships. They walk around, trade, lend, lie, and gossip with each other. The player walks in as another resident and can talk to anyone, buy things, borrow money, or plant a rumor and watch it spread. The shop's stock is **real products from Shopify's Global Catalog**, so buying in-game hands you a real product/checkout link.
-Check it out - https://www.agentstown.vip/
+
+https://www.agentstown.vip/
 
 ---
 
