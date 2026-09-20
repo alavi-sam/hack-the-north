@@ -18,6 +18,24 @@ clients: set[WebSocket] = set()
 FAST_HZ = 12          # movement/animation
 SLOW_SECONDS = float(os.getenv("SLOW_SECONDS", "11"))  # per-agent decision interval, staggered
 agent_tasks = {}
+chat_tasks = set()
+
+
+def set_paused(paused):
+    if paused == world.paused:
+        return
+    world.paused = llm.paused = paused
+    world.pause_revision += 1
+    if paused:
+        world.paused_at = time.monotonic()
+        for aid, task in agent_tasks.items():
+            if not task.done():
+                task.cancel()
+                world.agents[aid].next_tick = min(world.agents[aid].next_tick, clock.time() + .2)
+        for task in tuple(chat_tasks):
+            task.cancel()
+    else:
+        world.festival_until += time.monotonic() - world.paused_at
 
 # These are motives and offline reactions; live dialogue still comes from each agent's persona.
 EVENT_LABELS = {"crash": "the market crash", "shortage": "the shortage", "festival": "the festival",
@@ -259,6 +277,9 @@ async def agent_tick(ag):
 
 
 async def _agent_tick(ag):
+    if world.paused:
+        return
+    pause_revision = world.pause_revision
     # Sleeping costs no tokens and keeps the night quiet.
     if world.asleep(ag) and not ag.event_reaction:
         ag.energy = min(100, ag.energy + 22)
@@ -269,7 +290,7 @@ async def _agent_tick(ag):
 
     event_id = world.manual_event_id
     text = await llm.chat(SYSTEM, f"Resident ids: {', '.join(world.agents)}.\n" + build_prompt(ag), max_tokens=300)
-    if event_id != world.manual_event_id:
+    if world.paused or pause_revision != world.pause_revision or event_id != world.manual_event_id:
         return  # A late result must never overwrite a newer event reaction.
     reaction = ag.event_reaction
     data = llm.extract_json(text)
@@ -325,7 +346,7 @@ async def sim_loop():
     pending = agent_tasks
     while True:
         real_now = time.monotonic()
-        remaining = min(real_now - last, 1.0) * world.speed
+        remaining = 0 if world.paused else min(real_now - last, 1.0) * world.speed
         last = real_now
         # Small simulation steps preserve nightfall, elections and timed transactions.
         while remaining > 0:
@@ -335,7 +356,7 @@ async def sim_loop():
             remaining -= dt
         now = clock.time()
         for ag in world.agents.values():
-            if now >= ag.next_tick and (ag.id not in pending or pending[ag.id].done()):
+            if not world.paused and now >= ag.next_tick and (ag.id not in pending or pending[ag.id].done()):
                 ag.next_tick = now + SLOW_SECONDS + random.uniform(-1.5, 1.5)
                 pending[ag.id] = asyncio.create_task(agent_tick(ag))
         try:
@@ -365,11 +386,16 @@ async def supplier_loop():
     Shopify call never blocks the simulation."""
     idea = 0
     while True:
+        if world.paused:
+            await asyncio.sleep(.25)
+            continue
         if len(world.offers) < 4:
             query = world.wanted.pop(0) if world.wanted else RESTOCK_IDEAS[idea % len(RESTOCK_IDEAS)]
             idea += 1
             try:
                 found = await asyncio.to_thread(catalog.search, query, 15000, 2)
+                while world.paused:
+                    await asyncio.sleep(.25)
                 have = {o["name"] for o in world.offers} | {g["name"] for _, g in world.all_goods()}
                 world.offers.extend(o for o in found if o["name"] not in have)
             except Exception as e:
@@ -403,6 +429,15 @@ async def ws_endpoint(ws: WebSocket):
 async def handle(msg):
     kind = msg.get("type")
 
+    if kind == "pause":
+        if type(msg.get("paused")) is not bool:
+            return "Choose Pause or Resume."
+        set_paused(msg["paused"])
+        await broadcast(world.snapshot())
+        return "Town paused. Agent prompts are stopped." if world.paused else "Town resumed."
+    if world.paused:
+        return "The town is paused. Resume to take an action."
+
     if kind == "speed":
         world.set_speed(msg.get("speed"))
 
@@ -413,7 +448,9 @@ async def handle(msg):
     elif kind == "chat":
         ag = world.agents.get(msg.get("agent", ""))
         if ag:
-            asyncio.create_task(player_chat(ag, str(msg.get("text", ""))[:300]))
+            task = asyncio.create_task(player_chat(ag, str(msg.get("text", ""))[:300]))
+            chat_tasks.add(task)
+            task.add_done_callback(chat_tasks.discard)
 
     elif kind == "whisper":
         ag = world.agents.get(msg.get("agent", ""))
@@ -487,6 +524,9 @@ async def handle(msg):
 
 
 async def player_chat(ag, text):
+    if world.paused:
+        return
+    pause_revision = world.pause_revision
     ag.remember(f"The stranger said to me: {text}", 2, source="player")
     world.say_into(world.you, ag, text)          # your half of the thread
     system = f"""You are {ag.name}, the {ag.role} in a small town. {ag.persona}
@@ -503,6 +543,8 @@ You have {ag.cash} coins. Stay fully in character. Reply with ONE or TWO short s
         system,
         f"What you remember:\n{mems}\n{history}\nThe stranger says: \"{text}\"\nYour reply:",
         max_tokens=120)
+    if world.paused or pause_revision != world.pause_revision:
+        return
     reply = (reply or "...").strip().strip('"')[:200]
     ag.speak(reply, 9)
     ag.remember(f"I told the stranger: {reply}", 1)

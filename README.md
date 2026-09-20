@@ -33,6 +33,9 @@ validation) · `llm.py` (model client) · `catalog.py` (Shopify Global Catalog) 
 > Old `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`, and `LLM_FALLBACK_MODELS` settings are ignored.
 
 Use **Time** in the bottom toolbar to run the town at **5×, 10×, or 20×**.
+Use **Pause** at the bottom left to freeze the shared town and stop agent and player-chat
+prompts. Pending requests are cancelled; tokens already processed upstream may still be billed.
+**Resume** continues at the previous speed, without advancing through the paused time.
 Choose **Normal** or **End fast-forward & recap** to return to 1× and open the
 collapsible recap at the bottom right of the town. It covers that fast-forward period:
 completed purchases of 20+ coins, election results, new businesses, dividends, stock

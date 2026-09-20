@@ -245,6 +245,10 @@
         <button class="btn" id="whisper">Whisper a rumour</button>
         <button class="btn" id="work">Work a shift</button>
       </div>
+      <div class="stir" id="pause-controls">
+        <button class="btn primary" id="pause" aria-pressed="false">Pause</button>
+        <span id="pause-status" role="status"></span>
+      </div>
       <div class="stir">
         <span>Stir things up</span>
         <button class="btn" data-ev="crash">Market crash</button>
@@ -308,6 +312,10 @@ function showAction(text) {
   el.hidden = false;
 }
 function send(o) {
+  if (S?.paused && o.type !== 'pause') {
+    if (o.type !== 'move') showAction('The town is paused. Resume to take an action.');
+    return false;
+  }
   if (!ws || ws.readyState !== 1) {
     if (o.type !== 'move') showAction('Not connected to the town. Wait for the connection, then try again.');
     return false;
@@ -329,12 +337,18 @@ function connect() {
   ws.onmessage = e => {
     const m = JSON.parse(e.data);
     if (m.type === 'state') {
+      const pauseChanged = !!S?.paused !== !!m.paused;
+      if (pauseChanged || !S) {
+        pausedFrame = performance.now();
+        keys = {};
+      }
       if (S?.player.shift && !m.player.shift) {
         const outcome = [...m.log].reverse().find(e => /finished.*shift|finished a turn of odd jobs|could not pay your wages/.test(e.text));
         if (outcome) showAction(outcome.text);
       }
       S = m;
-      syncFestival(m.festival);
+      syncFestival(m.festival, pauseChanged);
+      renderPause();
       renderSpeed();
       sceneKey = JSON.stringify([S.map, S.plots, (S.shops || []).map(s => [s.place, s.name])]);
       scheduleRender();
@@ -350,6 +364,19 @@ function setLink(up) {
 connect();
 
 let recapId = null;
+let pausedFrame = 0;
+document.getElementById('pause').onclick = () => send({ type: 'pause', paused: !S?.paused });
+
+function renderPause() {
+  const paused = !!S.paused;
+  const button = document.getElementById('pause');
+  button.textContent = paused ? 'Resume' : 'Pause';
+  button.setAttribute('aria-pressed', String(paused));
+  document.getElementById('pause-status').textContent = paused ? 'Paused · agent prompts stopped' : '';
+  document.querySelectorAll('#bottom button:not(#pause), #time-speed').forEach(el => {
+    el.disabled = paused || (el.id === 'work' && !!S.player.shift);
+  });
+}
 document.getElementById('time-speed').onchange = e =>
   send({ type: 'speed', speed: Number(e.target.value) });
 document.getElementById('end-speedup').onclick = () => send({ type: 'speed', speed: 1 });
@@ -447,6 +474,7 @@ function nearest() {
   return best;
 }
 setInterval(() => {
+  if (S?.paused) return;
   const dx = (keys.d || keys.arrowright ? 1 : 0) - (keys.a || keys.arrowleft ? 1 : 0);
   const dy = (keys.s || keys.arrowdown ? 1 : 0) - (keys.w || keys.arrowup ? 1 : 0);
   if (dx || dy) {
@@ -528,13 +556,14 @@ const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let festival = null, festivalSeen = 0, festivalTimer;
 const festivalColors = ['#e8a33d', '#c4553f', '#f2e4ce', '#7fc4c0', '#d0857f'];
 
-function syncFestival(event) {
-  if (!event || event.remaining <= 0 || event.id === festivalSeen) return;
+function syncFestival(event, force = false) {
+  if (!event || event.remaining <= 0 || (event.id === festivalSeen && !force)) return;
   festivalSeen = event.id;
   festival = { started: performance.now() - (9 - event.remaining) * 1000 };
   const banner = document.getElementById('festival-banner');
   banner.hidden = false;
   clearTimeout(festivalTimer);
+  if (S.paused) return;
   festivalTimer = setTimeout(() => {
     banner.hidden = true;
     festival = null;
@@ -636,11 +665,12 @@ function paintFrame(now) {
   const dt = Math.min((now - (lastFrame || now)) / 1000, .05);
   lastFrame = now;
   animating = false;
-  try { render(now, dt); }
+  try { render(S.paused ? pausedFrame : now, S.paused ? 0 : dt); }
   catch (err) { console.error('render failed', err); }
-  if (animating) scheduleRender();
+  if (animating && !S.paused) scheduleRender();
 }
 function ease(current, target, dt, rate = 18) {
+  if (S.paused) return current;
   if (reducedMotion.matches || Math.abs(current - target) < .002) return target;
   animating = true;
   return current + (target - current) * (1 - Math.exp(-rate * dt));
@@ -715,7 +745,7 @@ function render(now, dt) {
   const P = S.player;
   const workBtn = document.getElementById('work');
   workBtn.textContent = P.shift ? `Working… ${P.shift}s` : 'Work a shift';
-  workBtn.disabled = !!P.shift;
+  workBtn.disabled = !!P.shift || !!S.paused;
   document.getElementById('job').innerHTML = P.employer_name
     ? `Hired by <b style="color:var(--paper)">${esc(P.employer_name)}</b> at ${P.wage} a shift`
       + ` &nbsp;·&nbsp; vigour ${P.energy}`

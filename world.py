@@ -301,6 +301,9 @@ class World:
         self.price_mult = 1.0
         self.log = []
         self.speed = 1
+        self.paused = False
+        self.pause_revision = 0
+        self.paused_at = 0
         self.speedup = None
         self.speedup_summary = None
         self.festival_id = 0
@@ -1649,9 +1652,10 @@ class World:
         return {
             "type": "state",
             "speed": self.speed,
+            "paused": self.paused,
             "speedup_summary": self.speedup_summary,
             "festival": {"id": self.festival_id,
-                         "remaining": max(0, self.festival_until - time.monotonic())},
+                         "remaining": max(0, self.festival_until - (self.paused_at if self.paused else time.monotonic()))},
             "day": self.day,
             "clock": round(self.clock(), 3),
             "phase": self.phase,
